@@ -16,7 +16,32 @@ class MyApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'Face Detection Validation',
       theme: ThemeData(primarySwatch: Colors.blue),
-      home: Scaffold(body: CameraWidget()),
+      // home: Scaffold(body: CameraWidget()),
+      home: Home(),
+    );
+  }
+}
+
+class Home extends StatelessWidget {
+  const Home({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Face Detection Validation')),
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            ElevatedButton(
+              onPressed: () {
+                Navigator.of(context).push(MaterialPageRoute(builder: (context) => CameraWidget()));
+              },
+              child: Text('Front face'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

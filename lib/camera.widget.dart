@@ -140,48 +140,50 @@ class _CameraWidgetState extends ConsumerState<CameraWidget> with WidgetsBinding
 
   @override
   Widget build(BuildContext context) {
-    return Stack(
-      children: [
-        Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Expanded(
-              child: Container(
-                width: double.infinity,
-                alignment: Alignment.center,
+    return Scaffold(
+      body: Stack(
+        children: [
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Expanded(
+                child: Container(
+                  width: double.infinity,
+                  alignment: Alignment.center,
+                  color: Colors.black,
+                  child: _cameraPreviewWidget(),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.all(8),
+                alignment: Alignment.bottomCenter,
                 color: Colors.black,
-                child: _cameraPreviewWidget(),
-              ),
-            ),
-            Container(
-              padding: const EdgeInsets.all(8),
-              alignment: Alignment.bottomCenter,
-              color: Colors.black,
-              child: Row(
-                children: [
-                  Expanded(child: SizedBox.shrink()),
-                  Expanded(child: _captureButton()),
-                  if (_availableCameras.length > 1) ...[
-                    Expanded(
-                      child: IconButton(
-                        onPressed: _toggleCamera,
-                        icon: const Icon(Icons.flip_camera_ios, color: Colors.white, size: 32),
+                child: Row(
+                  children: [
+                    Expanded(child: SizedBox.shrink()),
+                    Expanded(child: _captureButton()),
+                    if (_availableCameras.length > 1) ...[
+                      Expanded(
+                        child: IconButton(
+                          onPressed: _toggleCamera,
+                          icon: const Icon(Icons.flip_camera_ios, color: Colors.white, size: 32),
+                        ),
                       ),
-                    ),
-                  ] else ...[
-                    const Expanded(child: SizedBox.shrink()),
+                    ] else ...[
+                      const Expanded(child: SizedBox.shrink()),
+                    ],
                   ],
-                ],
+                ),
               ),
-            ),
-          ],
-        ),
-        if (_isProcessing)
-          Container(
-            color: Colors.black54,
-            child: const Center(child: CircularProgressIndicator(color: Colors.white)),
+            ],
           ),
-      ],
+          if (_isProcessing)
+            Container(
+              color: Colors.black54,
+              child: const Center(child: CircularProgressIndicator(color: Colors.white)),
+            ),
+        ],
+      ),
     );
   }
 

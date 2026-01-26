@@ -2,7 +2,9 @@
 package com.example.face_detection
 
 import android.net.Uri
+import android.util.Log
 import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.face.FaceContour
 import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetectorOptions
 import com.google.mlkit.vision.face.FaceLandmark
@@ -66,7 +68,10 @@ class MainActivity : FlutterActivity() {
                     .Builder()
                     .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
                     .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_ALL)
+                    .setContourMode(FaceDetectorOptions.CONTOUR_MODE_ALL) // 🔥 REQUIRED
                     .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_ALL)
+                    .setMinFaceSize(0.15f)
+                    .enableTracking()
                     .build()
 
             val detector = FaceDetection.getClient(options)
@@ -94,11 +99,19 @@ class MainActivity : FlutterActivity() {
                         // 🔁 Mask / face covered detection
                         val nose =
                             face.getLandmark(FaceLandmark.NOSE_BASE)
-                        val mouth =
-                            face.getLandmark(FaceLandmark.MOUTH_BOTTOM)
-
                         response["hasNose"] = nose != null
-                        response["hasMouth"] = mouth != null
+                        response["noseY"] = nose?.position?.y ?: -1f
+
+                        // 🔁 Mouth open detection
+                        val upperLipTop = face.getContour(FaceContour.UPPER_LIP_TOP)?.points
+                        Log.d("FaceDetection", "Upper lip points: $upperLip")
+                        val upperLipBottom = face.getContour(FaceContour.UPPER_LIP_BOTTOM)?.points
+
+                        response["hasMouth"] = !upperLipTop.isNullOrEmpty() && !upperLipBottom.isNullOrEmpty()
+
+                        // 🔁 Convert points to simple JSON-friendly lists
+                        response["upperLipPoints"] = upperLipTop?.map { listOf(it.x, it.y) } ?: emptyList<List<Float>>()
+                        response["lowerLipPoints"] = upperLipBottom?.map { listOf(it.x, it.y) } ?: emptyList<List<Float>>()
                     }
 
                     detector.close()
