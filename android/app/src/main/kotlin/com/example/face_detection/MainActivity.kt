@@ -104,7 +104,7 @@ class MainActivity : FlutterActivity() {
 
                         // 🔁 Mouth open detection
                         val upperLipTop = face.getContour(FaceContour.UPPER_LIP_TOP)?.points
-                        Log.d("FaceDetection", "Upper lip points: $upperLip")
+                        // Log.d("FaceDetection", "Upper lip points: $upperLipTop")
                         val upperLipBottom = face.getContour(FaceContour.UPPER_LIP_BOTTOM)?.points
 
                         response["hasMouth"] = !upperLipTop.isNullOrEmpty() && !upperLipBottom.isNullOrEmpty()
