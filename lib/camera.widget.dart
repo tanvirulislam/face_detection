@@ -226,7 +226,14 @@ class _CameraWidgetState extends ConsumerState<CameraWidget> with WidgetsBinding
     final result = await Chnannel.analyzeFace(file.path);
     final error = FaceRules.validate(result, expectedFace: widget.faceType, isFrontCamera: isFrontCamera);
 
-    setState(() => _isProcessing = false);
+    if (error != null) {
+      setState(() => _isProcessing = false);
+      _showResultDialog(error);
+      return;
+    } else {
+      if (!mounted) return;
+      Navigator.pop(context);
+    }
 
     final message = error ?? '✅ Face validation success';
     _showResultDialog(message);
@@ -267,16 +274,5 @@ class _CameraWidgetState extends ConsumerState<CameraWidget> with WidgetsBinding
 
   void _showCameraException(CameraException e) {
     showInSnackBar('Error: ${e.code}\n${e.description}');
-  }
-}
-
-String instruction(CameraWidget widget) {
-  switch (widget.faceType) {
-    case FaceType.front:
-      return 'Look straight at the camera';
-    case FaceType.left:
-      return 'Turn your face to the left';
-    case FaceType.right:
-      return 'Turn your face to the right';
   }
 }
