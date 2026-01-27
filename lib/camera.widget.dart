@@ -1,4 +1,5 @@
 import 'package:camera/camera.dart';
+import 'package:face_detection/enum.dart';
 import 'package:face_detection/face.rules.dart';
 import 'package:face_detection/channel.dart';
 import 'package:flutter/material.dart';
@@ -8,7 +9,8 @@ import 'package:intl/intl.dart';
 late List<CameraDescription> cameras;
 
 class CameraWidget extends ConsumerStatefulWidget {
-  const CameraWidget({super.key});
+  const CameraWidget({super.key, required this.faceType});
+  final FaceType faceType;
 
   @override
   ConsumerState<ConsumerStatefulWidget> createState() => _CameraWidgetState();
@@ -220,7 +222,7 @@ class _CameraWidgetState extends ConsumerState<CameraWidget> with WidgetsBinding
 
     // Call your face validation here
     final result = await Chnannel.analyzeFace(file.path);
-    final error = FaceRules.validate(result);
+    final error = FaceRules.validate(result, expectedFace: widget.faceType);
 
     setState(() => _isProcessing = false);
 
@@ -263,5 +265,16 @@ class _CameraWidgetState extends ConsumerState<CameraWidget> with WidgetsBinding
 
   void _showCameraException(CameraException e) {
     showInSnackBar('Error: ${e.code}\n${e.description}');
+  }
+}
+
+String instruction(CameraWidget widget) {
+  switch (widget.faceType) {
+    case FaceType.front:
+      return 'Look straight at the camera';
+    case FaceType.left:
+      return 'Turn your face to the left';
+    case FaceType.right:
+      return 'Turn your face to the right';
   }
 }

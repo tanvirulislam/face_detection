@@ -1,4 +1,5 @@
 import 'package:face_detection/camera.widget.dart';
+import 'package:face_detection/enum.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -35,9 +36,27 @@ class Home extends StatelessWidget {
           children: [
             ElevatedButton(
               onPressed: () {
-                Navigator.of(context).push(MaterialPageRoute(builder: (context) => CameraWidget()));
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const CameraWidget(faceType: FaceType.front)),
+                );
               },
-              child: Text('Front face'),
+              child: const Text('Front Face'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.push(context, MaterialPageRoute(builder: (_) => const CameraWidget(faceType: FaceType.left)));
+              },
+              child: const Text('Left Face'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const CameraWidget(faceType: FaceType.right)),
+                );
+              },
+              child: const Text('Right Face'),
             ),
           ],
         ),

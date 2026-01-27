@@ -112,6 +112,9 @@ class MainActivity : FlutterActivity() {
                         // 🔁 Convert points to simple JSON-friendly lists
                         response["upperLipPoints"] = upperLipTop?.map { listOf(it.x, it.y) } ?: emptyList<List<Float>>()
                         response["lowerLipPoints"] = upperLipBottom?.map { listOf(it.x, it.y) } ?: emptyList<List<Float>>()
+
+                         // 🔁 Smile detection
+                        response["smile"] = face.smilingProbability ?: -1.0
                     }
 
                     detector.close()
