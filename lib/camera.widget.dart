@@ -1,6 +1,6 @@
 import 'package:camera/camera.dart';
 import 'package:face_detection/face.rules.dart';
-import 'package:face_detection/face.validator.dart';
+import 'package:face_detection/channel.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -219,7 +219,7 @@ class _CameraWidgetState extends ConsumerState<CameraWidget> with WidgetsBinding
     }
 
     // Call your face validation here
-    final result = await FaceValidator.analyzeFace(file.path);
+    final result = await Chnannel.analyzeFace(file.path);
     final error = FaceRules.validate(result);
 
     setState(() => _isProcessing = false);

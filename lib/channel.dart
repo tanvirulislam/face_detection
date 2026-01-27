@@ -1,6 +1,6 @@
 import 'package:flutter/services.dart';
 
-class FaceValidator {
+class Chnannel {
   // 🔁 UPDATE HERE if you change channel name in Android
   static const MethodChannel _channel = MethodChannel('com.example.face_detection/face_validator');
 
