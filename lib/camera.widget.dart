@@ -220,9 +220,11 @@ class _CameraWidgetState extends ConsumerState<CameraWidget> with WidgetsBinding
       return;
     }
 
+    final isFrontCamera = _availableCameras[_currentCameraIndex].lensDirection == CameraLensDirection.front;
+
     // Call your face validation here
     final result = await Chnannel.analyzeFace(file.path);
-    final error = FaceRules.validate(result, expectedFace: widget.faceType);
+    final error = FaceRules.validate(result, expectedFace: widget.faceType, isFrontCamera: isFrontCamera);
 
     setState(() => _isProcessing = false);
 
