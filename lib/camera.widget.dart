@@ -6,6 +6,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
+import 'dart:convert';
+import 'package:flutter/foundation.dart';
+import 'package:face_detection/web/js_bridge.dart';
+
 late List<CameraDescription> cameras;
 
 class CameraWidget extends ConsumerStatefulWidget {
@@ -50,10 +54,13 @@ class _CameraWidgetState extends ConsumerState<CameraWidget> with WidgetsBinding
 
     _initializeControllerFuture = _controller!.initialize().then((_) {
       // Set flash mode from provider after initialization
-      final flashMode = CameraLensDirection.front == _availableCameras[_currentCameraIndex].lensDirection
-          ? FlashMode.auto
-          : FlashMode.off;
-      _controller!.setFlashMode(flashMode);
+
+      if (!kIsWeb) {
+        final flashMode = CameraLensDirection.front == _availableCameras[_currentCameraIndex].lensDirection
+            ? FlashMode.auto
+            : FlashMode.off;
+        _controller!.setFlashMode(flashMode);
+      }
     });
     setState(() {});
   }
@@ -223,7 +230,19 @@ class _CameraWidgetState extends ConsumerState<CameraWidget> with WidgetsBinding
     final isFrontCamera = _availableCameras[_currentCameraIndex].lensDirection == CameraLensDirection.front;
 
     // Call your face validation here
-    final result = await Chnannel.analyzeFace(file.path);
+    // final result = await Chnannel.analyzeFace(file.path);
+    Map<String, dynamic> result;
+
+    if (kIsWeb) {
+      final bytes = await file.readAsBytes();
+      final base64Image = base64Encode(bytes);
+
+      final jsResult = detectFaceFromImage(base64Image);
+      result = Map<String, dynamic>.from(jsResult as dynamic);
+    } else {
+      // ANDROID (later)
+      result = await Chnannel.analyzeFace(file.path);
+    }
     final error = FaceRules.validate(result, expectedFace: widget.faceType, isFrontCamera: isFrontCamera);
 
     if (error != null) {
