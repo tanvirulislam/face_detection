@@ -237,12 +237,11 @@ class _CameraWidgetState extends ConsumerState<CameraWidget> with WidgetsBinding
       final bytes = await file.readAsBytes();
       final base64Image = base64Encode(bytes);
 
-      final jsResult = detectFaceFromImage(base64Image);
-      result = Map<String, dynamic>.from(jsResult as dynamic);
+      result = await detectFaceWeb(base64Image);
     } else {
-      // ANDROID (later)
       result = await Chnannel.analyzeFace(file.path);
     }
+
     final error = FaceRules.validate(result, expectedFace: widget.faceType, isFrontCamera: isFrontCamera);
 
     if (error != null) {

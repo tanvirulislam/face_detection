@@ -35,15 +35,15 @@ async function detectFaceFromImage(base64Image) {
 
                 if (detections.length === 1) {
                     const kp = detections[0].keypoints;
-
                     const leftEye = kp[0];
                     const rightEye = kp[1];
                     const nose = kp[2];
 
-                    // simple yaw estimation
-                    resultData.yaw = (nose.x - (leftEye.x + rightEye.x) / 2) * 100;
+                    resultData.yaw =
+                        (nose.x - (leftEye.x + rightEye.x) / 2) * 100;
                 }
 
+                // 🔥 RETURN STRING, NOT OBJECT
                 resolve(JSON.stringify(resultData));
             });
 
