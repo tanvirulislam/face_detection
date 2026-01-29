@@ -1,4 +1,5 @@
 import 'package:face_detection/enum.dart';
+import 'package:flutter/foundation.dart';
 
 class FaceRules {
   static String? validate(Map<String, dynamic> data, {required FaceType expectedFace, required bool isFrontCamera}) {
@@ -16,21 +17,21 @@ class FaceRules {
 
     switch (expectedFace) {
       case FaceType.front:
-        if (yaw.abs() > 15) {
+        if (yaw.abs() > FaceYawThresholds.front(isWeb: kIsWeb)) {
           return 'Please look straight at the camera';
         }
         break;
 
       case FaceType.left:
-        // Left face capture → user must turn RIGHT
-        if (yaw < 20) {
+        // user must turn RIGHT
+        if (yaw < FaceYawThresholds.left(isWeb: kIsWeb)) {
           return 'Please turn your face to the RIGHT';
         }
         break;
 
       case FaceType.right:
-        // Right face capture → user must turn LEFT
-        if (yaw > -20) {
+        // user must turn LEFT
+        if (yaw > FaceYawThresholds.right(isWeb: kIsWeb)) {
           return 'Please turn your face to the LEFT';
         }
         break;
@@ -44,5 +45,18 @@ class FaceRules {
     }
 
     return null; // ✅ VALID
+  }
+}
+
+class FaceYawThresholds {
+  // static double front = 15;
+  static double front({required bool isWeb}) => isWeb ? 9 : 15;
+
+  static double left({required bool isWeb}) {
+    return isWeb ? 16 : 20;
+  }
+
+  static double right({required bool isWeb}) {
+    return isWeb ? -14 : -20;
   }
 }
