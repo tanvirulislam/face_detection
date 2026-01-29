@@ -16,7 +16,8 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Face Detection Validation',
-      theme: ThemeData(primarySwatch: Colors.blue),
+      // theme: ThemeData(primarySwatch: Colors.blue),
+      darkTheme: ThemeData.dark(),
       // home: Scaffold(body: CameraWidget()),
       home: Home(),
     );

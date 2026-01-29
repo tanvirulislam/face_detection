@@ -1,3 +1,5 @@
+import 'dart:developer';
+
 import 'package:camera/camera.dart';
 import 'package:face_detection/enum.dart';
 import 'package:face_detection/face.rules.dart';
@@ -8,7 +10,7 @@ import 'package:intl/intl.dart';
 
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
-import 'package:face_detection/web/js_bridge.dart';
+import 'package:face_detection/js_bridge.dart';
 
 late List<CameraDescription> cameras;
 
@@ -236,8 +238,8 @@ class _CameraWidgetState extends ConsumerState<CameraWidget> with WidgetsBinding
     if (kIsWeb) {
       final bytes = await file.readAsBytes();
       final base64Image = base64Encode(bytes);
-
       result = await detectFaceWeb(base64Image);
+      log('result: $result');
     } else {
       result = await Chnannel.analyzeFace(file.path);
     }
