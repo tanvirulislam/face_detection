@@ -53,10 +53,10 @@ class FaceYawThresholds {
   static double front({required bool isWeb}) => isWeb ? 9 : 15;
 
   static double left({required bool isWeb}) {
-    return isWeb ? 16 : 20;
+    return isWeb ? 13 : 20;
   }
 
   static double right({required bool isWeb}) {
-    return isWeb ? -14 : -20;
+    return isWeb ? -12 : -20;
   }
 }
