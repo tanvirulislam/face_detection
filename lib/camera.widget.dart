@@ -1,12 +1,17 @@
+import 'dart:developer';
+
 import 'package:camera/camera.dart';
 import 'package:face_detection/enum.dart';
 import 'package:face_detection/face.rules.dart';
 import 'package:face_detection/channel.dart';
+import 'package:face_detection/ml/mask.detector.dart';
+import 'package:face_detection/utils/face.cropper.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
 late List<CameraDescription> cameras;
+late MaskDetector maskDetector;
 
 class CameraWidget extends ConsumerStatefulWidget {
   const CameraWidget({super.key, required this.faceType});
@@ -27,6 +32,8 @@ class _CameraWidgetState extends ConsumerState<CameraWidget> with WidgetsBinding
   @override
   void initState() {
     super.initState();
+    maskDetector = MaskDetector();
+    maskDetector.load();
     _initCamera();
   }
 
@@ -224,7 +231,14 @@ class _CameraWidgetState extends ConsumerState<CameraWidget> with WidgetsBinding
 
     // Call your face validation here
     final result = await Chnannel.analyzeFace(file.path);
+    log('result: $result');
     final error = FaceRules.validate(result, expectedFace: widget.faceType, isFrontCamera: isFrontCamera);
+
+    // ✅ Face is valid → crop for mask detection
+    final faceBox = result['faceBox'];
+
+    final croppedFace = await cropFaceForMask(imagePath: file.path, faceBox: Map<String, dynamic>.from(faceBox));
+    maskDetector.detectMask(croppedFace);
 
     if (error != null) {
       setState(() => _isProcessing = false);
