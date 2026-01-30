@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:image/image.dart' as img;
+import 'package:path_provider/path_provider.dart';
 
 /// Crops face for mask detection using ML Kit bounding box
 /// Returns a 224x224 image ready for TFLite
@@ -32,12 +33,12 @@ Future<File> cropFaceForMask({
 
   // 🔹 Improve crop for mask region:
   // Extend slightly downward to cover nose & mouth
-  int extendDown = (height * 0.1).toInt();
+  int extendDown = (height * 0.25).toInt();
   bottom = (bottom + extendDown).clamp(0, original.height);
   height = bottom - top;
 
   // Optional: shrink top slightly to remove forehead
-  int shrinkTop = (height * 0.05).toInt();
+  int shrinkTop = (height * 0.15).toInt();
   top = (top + shrinkTop).clamp(0, original.height);
   height = bottom - top;
 
@@ -53,8 +54,15 @@ Future<File> cropFaceForMask({
 
   // Optional: debug image
   if (saveDebugImage) {
-    final debugFile = File(imagePath.replaceFirst('.jpg', '_debug_face.jpg'));
+    final directory = await getExternalStorageDirectory();
+    final debugPath = '${directory!.path}/debug_faces';
+
+    // Create directory if it doesn't exist
+    await Directory(debugPath).create(recursive: true);
+
+    final debugFile = File('$debugPath/face_${DateTime.now().millisecondsSinceEpoch}.jpg');
     await debugFile.writeAsBytes(img.encodeJpg(resized, quality: 95));
+    // log('Saved debug image at: ${debugFile.path}');
   }
 
   return croppedFile;

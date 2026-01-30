@@ -25,7 +25,9 @@ class MaskDetector {
         224,
         (y) => List.generate(224, (x) {
           final pixel = resized.getPixel(x, y);
-          return [pixel.r / 255.0, pixel.g / 255.0, pixel.b / 255.0];
+          // return [pixel.r / 255.0, pixel.g / 255.0, pixel.b / 255.0];
+          double normalize(int v) => (v - 127.5) / 127.5;
+          return [normalize(pixel.b.toInt()), normalize(pixel.g.toInt()), normalize(pixel.r.toInt())];
         }),
       ),
     );
@@ -36,12 +38,20 @@ class MaskDetector {
     final maskScore = output[0][0];
     final noMaskScore = output[0][1];
 
-    // Apply decision
-    final hasMask = maskScore > noMaskScore;
+    // // Apply decision
+    // bool hasMask = maskScore > noMaskScore ? false : true;
+
+    // log('maskScore: $maskScore, noMaskScore: $noMaskScore');
+    // log('hasMask: $hasMask');
+
+    // return hasMask;
+
+    // Calibrated threshold
+    final hasMask = maskScore > 0.015;
 
     log('maskScore: $maskScore, noMaskScore: $noMaskScore, hasMask: $hasMask');
 
-    return maskScore > noMaskScore;
+    return hasMask;
   }
 
   void close() {
