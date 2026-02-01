@@ -1,7 +1,12 @@
 import 'package:face_detection/enum.dart';
 
 class FaceRules {
-  static String? validate(Map<String, dynamic> data, {required FaceType expectedFace, required bool isFrontCamera}) {
+  static String? validate(
+    Map<String, dynamic> data, {
+    required FaceType expectedFace,
+    required bool isFrontCamera,
+    required bool hasMask,
+  }) {
     // 1️⃣ Face count
     final faceCount = (data['faceCount'] ?? 0) as int;
     if (faceCount == 0) return 'No face detected';
@@ -39,8 +44,14 @@ class FaceRules {
     // 3️⃣ Eyes visibility
     final leftEye = (data['leftEyeOpen'] ?? 1.0).toDouble();
     final rightEye = (data['rightEyeOpen'] ?? 1.0).toDouble();
-    if (leftEye < 0.2 || rightEye < 0.2) {
+    if (leftEye < 0.6 || rightEye < 0.6) {
       return 'Please make sure your eyes are visible';
+    }
+
+    if (expectedFace == FaceType.front) {
+      if (hasMask) {
+        return 'Please remove your mask';
+      }
     }
 
     return null; // ✅ VALID

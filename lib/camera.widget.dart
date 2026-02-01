@@ -231,18 +231,26 @@ class _CameraWidgetState extends ConsumerState<CameraWidget> with WidgetsBinding
 
     // Call your face validation here
     final result = await Chnannel.analyzeFace(file.path);
-    // log('result: $result');
-    final error = FaceRules.validate(result, expectedFace: widget.faceType, isFrontCamera: isFrontCamera);
+    log('result: $result');
+    bool? hasMask;
 
-    // ✅ Face is valid → crop for mask detection
+    // ✅ mask detection
     final faceBox = result['faceBox'];
+    if (faceBox != null) {
+      final croppedFace = await cropFaceForMask(
+        imagePath: file.path,
+        faceBox: Map<String, dynamic>.from(faceBox),
+        saveDebugImage: true,
+      );
+      hasMask = maskDetector.detectMask(croppedFace);
+    }
 
-    final croppedFace = await cropFaceForMask(
-      imagePath: file.path,
-      faceBox: Map<String, dynamic>.from(faceBox),
-      saveDebugImage: true,
+    final error = FaceRules.validate(
+      result,
+      expectedFace: widget.faceType,
+      isFrontCamera: isFrontCamera,
+      hasMask: hasMask ?? false,
     );
-    maskDetector.detectMask(croppedFace);
 
     if (error != null) {
       setState(() => _isProcessing = false);
