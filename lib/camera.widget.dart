@@ -1,3 +1,5 @@
+import 'dart:developer';
+
 import 'package:camera/camera.dart';
 import 'package:face_detection/enum.dart';
 import 'package:face_detection/face.rules.dart';
@@ -224,6 +226,7 @@ class _CameraWidgetState extends ConsumerState<CameraWidget> with WidgetsBinding
 
     // Call your face validation here
     final result = await Chnannel.analyzeFace(file.path);
+    log('result: $result');
     final error = FaceRules.validate(result, expectedFace: widget.faceType, isFrontCamera: isFrontCamera);
 
     if (error != null) {

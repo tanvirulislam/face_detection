@@ -39,7 +39,7 @@ class FaceRules {
     // 3️⃣ Eyes visibility
     final leftEye = (data['leftEyeOpen'] ?? 1.0).toDouble();
     final rightEye = (data['rightEyeOpen'] ?? 1.0).toDouble();
-    if (leftEye < 0.2 || rightEye < 0.2) {
+    if (leftEye < 0.5 || rightEye < 0.5) {
       return 'Please make sure your eyes are visible';
     }
 
