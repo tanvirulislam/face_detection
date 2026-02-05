@@ -81,40 +81,27 @@ class MainActivity : FlutterActivity() {
                 .addOnSuccessListener { faces ->
                     val response = HashMap<String, Any>()
 
-                    // 🔁 Face count validation
+                                      // 🔁 Face count validation
                     response["faceCount"] = faces.size
 
                     if (faces.isNotEmpty()) {
                         val face = faces[0]
 
-                        // 🔁 Head rotation (left / right / front)
+                    // 🔁 Face bounding box (for cropping)
+                        val box = face.boundingBox
+                        response["faceBox"] = mapOf(
+                            "left" to box.left,
+                            "top" to box.top,
+                            "right" to box.right,
+                            "bottom" to box.bottom
+                        )
+
+                        // 🔁 Head rotation
                         response["yaw"] = face.headEulerAngleY
 
-                        // 🔁 Sunglasses / eyes closed detection
-                        response["leftEyeOpen"] =
-                            face.leftEyeOpenProbability ?: -1.0
-                        response["rightEyeOpen"] =
-                            face.rightEyeOpenProbability ?: -1.0
-
-                        // 🔁 Mask / face covered detection
-                        val nose =
-                            face.getLandmark(FaceLandmark.NOSE_BASE)
-                        response["hasNose"] = nose != null
-                        response["noseY"] = nose?.position?.y ?: -1f
-
-                        // 🔁 Mouth open detection
-                        val upperLipTop = face.getContour(FaceContour.UPPER_LIP_TOP)?.points
-                        // Log.d("FaceDetection", "Upper lip points: $upperLipTop")
-                        val upperLipBottom = face.getContour(FaceContour.UPPER_LIP_BOTTOM)?.points
-
-                        response["hasMouth"] = !upperLipTop.isNullOrEmpty() && !upperLipBottom.isNullOrEmpty()
-
-                        // 🔁 Convert points to simple JSON-friendly lists
-                        response["upperLipPoints"] = upperLipTop?.map { listOf(it.x, it.y) } ?: emptyList<List<Float>>()
-                        response["lowerLipPoints"] = upperLipBottom?.map { listOf(it.x, it.y) } ?: emptyList<List<Float>>()
-
-                         // 🔁 Smile detection
-                        response["smile"] = face.smilingProbability ?: -1.0
+                        // 🔁 Eye visibility
+                        response["leftEyeOpen"] = face.leftEyeOpenProbability ?: -1.0
+                        response["rightEyeOpen"] = face.rightEyeOpenProbability ?: -1.0
                     }
 
                     detector.close()
