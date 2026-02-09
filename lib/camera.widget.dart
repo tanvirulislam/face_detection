@@ -4,6 +4,7 @@ import 'package:camera/camera.dart';
 import 'package:face_detection/enum.dart';
 import 'package:face_detection/face.rules.dart';
 import 'package:face_detection/channel.dart';
+import 'package:face_detection/face_matching/provider/provider.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -215,6 +216,14 @@ class _CameraWidgetState extends ConsumerState<CameraWidget> with WidgetsBinding
     setState(() => _isProcessing = true);
 
     final file = await takePicture();
+
+    if (widget.faceType == FaceType.front) {
+      ref.read(provider1.notifier).add(file);
+    } else if (widget.faceType == FaceType.left) {
+      ref.read(provider2.notifier).add(file);
+    } else if (widget.faceType == FaceType.right) {
+      ref.read(provider3.notifier).add(file);
+    }
 
     if (file == null) {
       setState(() => _isProcessing = false);
