@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:developer' as dev;
 import 'dart:io';
 import 'package:camera/camera.dart';
-import 'package:face_detection/motion/model.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:google_mlkit_image_labeling/google_mlkit_image_labeling.dart';
@@ -34,6 +33,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   late final ImageLabeler _imageLabeler;
   final FaceGuard _faceGuard = FaceGuard();
   final BlinkDetector _blinkDetector = BlinkDetector();
+  final BrightnessChecker _brightnessChecker = BrightnessChecker();
 
   int _labelFrame = 0;
   List<ImageLabel> _lastLabels = [];
@@ -52,6 +52,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   XFile? _rightImage;
 
   FaceGuardResult _guardResult = FaceGuardResult.ok;
+  FaceGuardResult _lightingResult = FaceGuardResult.ok;
   String _statusText = 'Preparing camera…';
   int _feedbackSeq = 0;
   Color _ovalColor = Colors.white54;
@@ -180,6 +181,10 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     if (!mounted || !_controllerReady) return;
 
     try {
+      // CHECK BRIGHTNESS FIRST
+      final lightingCheck = _brightnessChecker.checkLighting(image);
+      setState(() => _lightingResult = lightingCheck);
+
       final cam = _cameras[_cameraIndex];
       final isFront = cam.lensDirection == CameraLensDirection.front;
       final input = CameraUtils.toInputImage(image, cam);
@@ -309,6 +314,12 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   }
 
   void _evaluate({required Face face, required double yaw, required double smile}) {
+    // ⚠️ CHECK LIGHTING FIRST - BEFORE ANY STEP EVALUATION
+    if (_lightingResult.blockStep) {
+      // Don't allow any step to pass if lighting is blocked
+      return;
+    }
+
     bool passed = false;
 
     switch (_step.step) {
@@ -400,7 +411,6 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     });
   }
 
-  // NEW: Capture image for specific step
   Future<void> _captureStepImage() async {
     if (_isCapturing) return;
     _isCapturing = true;
@@ -433,7 +443,6 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     }
   }
 
-  // NEW: Finish verification and return all 3 images
   Future<void> _finishVerification() async {
     _setFeedback('✅ Verification Complete!', Colors.green, true);
 
@@ -501,6 +510,9 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   Widget _buildBody() {
     final size = MediaQuery.of(context).size;
 
+    // Determine which warning to show (priority: guard > lighting)
+    final activeWarning = _guardResult.blockStep ? _guardResult : _lightingResult;
+
     return Stack(
       fit: StackFit.expand,
       children: [
@@ -511,7 +523,14 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         AnimatedBuilder(
           animation: _pulse,
           builder: (_, __) => CustomPaint(
-            painter: OvalPainter(color: _guardResult.blockStep ? Colors.red : _ovalColor, scale: _pulse.value),
+            painter: OvalPainter(
+              color: _guardResult.blockStep
+                  ? Colors.red
+                  : _lightingResult.warning == FaceWarning.lowLight
+                  ? Colors.orange
+                  : _ovalColor,
+              scale: _pulse.value,
+            ),
             child: const SizedBox.expand(),
           ),
         ),
@@ -568,21 +587,26 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
           ),
         ),
 
-        // Guard warning banner
-        if (_guardResult.blockStep)
+        // Warning banner (Guard or Lighting)
+        if (activeWarning.warning != FaceWarning.none)
           Positioned(
             top: 80,
             left: 16,
             right: 16,
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              decoration: BoxDecoration(color: Colors.red.withOpacity(0.92), borderRadius: BorderRadius.circular(12)),
+              decoration: BoxDecoration(
+                color: (activeWarning.blockStep ? Colors.red : Colors.orange).withOpacity(0.92),
+                borderRadius: BorderRadius.circular(12),
+              ),
               child: Row(
                 children: [
                   Icon(
-                    _guardResult.warning == FaceWarning.sunglasses
+                    activeWarning.warning == FaceWarning.lowLight
+                        ? Icons.lightbulb_outline
+                        : activeWarning.warning == FaceWarning.sunglasses
                         ? Icons.wb_sunny_outlined
-                        : _guardResult.warning == FaceWarning.eyeglasses
+                        : activeWarning.warning == FaceWarning.eyeglasses
                         ? Icons.visibility_outlined
                         : Icons.warning_rounded,
                     color: Colors.white,
@@ -591,7 +615,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
-                      _guardResult.message,
+                      activeWarning.message,
                       style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600),
                     ),
                   ),

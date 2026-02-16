@@ -1,4 +1,4 @@
-import 'dart:developer' as dev; // Add 'as dev' prefix
+import 'dart:developer' as dev;
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
@@ -31,7 +31,7 @@ class FaceGuard {
     // Check nudity
     for (final l in labels) {
       if (_nudityLabels.any((n) => l.label.toLowerCase().contains(n)) && l.confidence > 0.6) {
-        dev.log('🚫 Nudity: ${l.label} (${l.confidence.toStringAsFixed(2)})'); // Changed to dev.log
+        dev.log('🚫 Nudity: ${l.label} (${l.confidence.toStringAsFixed(2)})');
         return const FaceGuardResult(
           warning: FaceWarning.nudity,
           message: '🚫 Nudity detected. Please dress appropriately.',
@@ -43,7 +43,7 @@ class FaceGuard {
     // Check mask/hand
     for (final l in labels) {
       if (_maskLabels.any((m) => l.label.toLowerCase().contains(m)) && l.confidence > 0.55) {
-        dev.log('⚠️ Mask/hand: ${l.label} (${l.confidence.toStringAsFixed(2)})'); // Changed to dev.log
+        dev.log('⚠️ Mask/hand: ${l.label} (${l.confidence.toStringAsFixed(2)})');
         return const FaceGuardResult(
           warning: FaceWarning.maskCovering,
           message: '⚠️ Remove mask or hand from face.',
@@ -76,7 +76,7 @@ class FaceGuard {
     if (_eyeMaxHistory.length >= _sunglassWindow) {
       final maxVal = _eyeMaxHistory.reduce((a, b) => a > b ? a : b);
       if (maxVal < _sunglassMaxThresh) {
-        dev.log('🕶 Dark lenses — max eye: $maxVal'); // Changed to dev.log
+        dev.log('🕶 Dark lenses — max eye: $maxVal');
         return const FaceGuardResult(
           warning: FaceWarning.sunglasses,
           message: '🕶 Remove sunglasses to continue.',
@@ -88,7 +88,7 @@ class FaceGuard {
     // Label-based sunglasses detection
     for (final l in labels) {
       if (_sunglassLabels.any((s) => l.label.toLowerCase().contains(s)) && l.confidence > 0.60) {
-        dev.log('🕶 Sunglasses: ${l.label} (${l.confidence.toStringAsFixed(2)})'); // Changed to dev.log
+        dev.log('🕶 Sunglasses: ${l.label} (${l.confidence.toStringAsFixed(2)})');
         return const FaceGuardResult(
           warning: FaceWarning.sunglasses,
           message: '🕶 Remove sunglasses to continue.',
@@ -100,7 +100,7 @@ class FaceGuard {
     // Label-based glasses detection
     for (final l in labels) {
       if (_glassLabels.any((g) => l.label.toLowerCase().contains(g)) && l.confidence > 0.65) {
-        dev.log('👓 Glasses: ${l.label} (${l.confidence.toStringAsFixed(2)})'); // Changed to dev.log
+        dev.log('👓 Glasses: ${l.label} (${l.confidence.toStringAsFixed(2)})');
         return const FaceGuardResult(
           warning: FaceWarning.eyeglasses,
           message: '👓 Remove glasses to continue.',
@@ -145,7 +145,7 @@ class BlinkDetector {
         final ms = DateTime.now().difference(_blinkStart!).inMilliseconds;
         if (ms < 800) {
           _blinkCount++;
-          dev.log('✅ Blink #$_blinkCount (${ms}ms)'); // Changed to dev.log
+          dev.log('✅ Blink #$_blinkCount (${ms}ms)');
           _cooldown = true;
           Future.delayed(Duration(milliseconds: _cooldownMs), () => _cooldown = false);
         }
@@ -287,4 +287,102 @@ class CameraUtils {
       ),
     );
   }
+}
+
+// ═══════════════════════════════════════════════════════════
+// BRIGHTNESS CHECKER - Low Light Detection
+// ═══════════════════════════════════════════════════════════
+
+class BrightnessChecker {
+  static const int _historySize = 10;
+  static const double _lowLightThreshold = 80.0;
+  static const double _criticalLightThreshold = 60.0;
+
+  final List<double> _brightnessHistory = [];
+
+  double calculateBrightness(CameraImage image) {
+    try {
+      if (image.format.group == ImageFormatGroup.nv21) {
+        return _calculateBrightnessNV21(image);
+      } else if (image.format.group == ImageFormatGroup.bgra8888) {
+        return _calculateBrightnessBGRA(image);
+      }
+      return 255.0;
+    } catch (e) {
+      dev.log('Brightness calculation error: $e');
+      return 255.0;
+    }
+  }
+
+  double _calculateBrightnessNV21(CameraImage image) {
+    final yPlane = image.planes[0];
+    final yBytes = yPlane.bytes;
+
+    int sum = 0;
+    int count = 0;
+    for (int i = 0; i < yBytes.length; i += 100) {
+      sum += yBytes[i];
+      count++;
+    }
+
+    return count > 0 ? sum / count : 0.0;
+  }
+
+  double _calculateBrightnessBGRA(CameraImage image) {
+    final bytes = image.planes[0].bytes;
+
+    int sum = 0;
+    int count = 0;
+
+    for (int i = 0; i < bytes.length; i += 400) {
+      if (i + 2 < bytes.length) {
+        final b = bytes[i];
+        final g = bytes[i + 1];
+        final r = bytes[i + 2];
+
+        final luminance = (0.299 * r + 0.587 * g + 0.114 * b).toInt();
+        sum += luminance;
+        count++;
+      }
+    }
+
+    return count > 0 ? sum / count : 0.0;
+  }
+
+  FaceGuardResult checkLighting(CameraImage image) {
+    final brightness = calculateBrightness(image);
+
+    _brightnessHistory.add(brightness);
+    if (_brightnessHistory.length > _historySize) {
+      _brightnessHistory.removeAt(0);
+    }
+
+    if (_brightnessHistory.length < 5) {
+      return FaceGuardResult.ok;
+    }
+
+    final avgBrightness = _brightnessHistory.reduce((a, b) => a + b) / _brightnessHistory.length;
+
+    dev.log('💡 Brightness: ${avgBrightness.toStringAsFixed(1)}');
+
+    if (avgBrightness < _criticalLightThreshold) {
+      return const FaceGuardResult(
+        warning: FaceWarning.lowLight,
+        message: '⚠️ Very poor lighting. Move to a brighter area.',
+        blockStep: true,
+      );
+    }
+
+    if (avgBrightness < _lowLightThreshold) {
+      return const FaceGuardResult(
+        warning: FaceWarning.lowLight,
+        message: '💡 Low light detected. Better lighting recommended.',
+        blockStep: false,
+      );
+    }
+
+    return FaceGuardResult.ok;
+  }
+
+  void reset() => _brightnessHistory.clear();
 }

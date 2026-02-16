@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+import 'package:camera/camera.dart';
 
 // ═══════════════════════════════════════════════════════════
 // ENUMS
@@ -9,7 +10,15 @@ enum FaceType { front, back }
 
 enum LiveStep { lookStraight, blinkEyes, turnLeft, turnRight, smile }
 
-enum FaceWarning { none, maskCovering, sunglasses, eyeglasses, nudity }
+// ADD lowLight here ↓
+enum FaceWarning {
+  none,
+  maskCovering,
+  sunglasses,
+  eyeglasses,
+  nudity,
+  lowLight, // ← THIS LINE MUST BE HERE
+}
 
 // ═══════════════════════════════════════════════════════════
 // MODELS
@@ -40,6 +49,14 @@ class FaceGuardResult {
   const FaceGuardResult({required this.warning, required this.message, required this.blockStep});
 
   static const ok = FaceGuardResult(warning: FaceWarning.none, message: '', blockStep: false);
+}
+
+class VerificationResult {
+  final XFile frontImage;
+  final XFile leftImage;
+  final XFile rightImage;
+
+  VerificationResult({required this.frontImage, required this.leftImage, required this.rightImage});
 }
 
 // ═══════════════════════════════════════════════════════════
