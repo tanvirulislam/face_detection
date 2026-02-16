@@ -1,1 +1,1 @@
-enum FaceType { front, left, right }
+// enum FaceType { front, left, right }

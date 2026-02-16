@@ -8,7 +8,10 @@ plugins {
 android {
     namespace = "com.example.face_detection"
     compileSdk = 36
-    ndkVersion = flutter.ndkVersion
+    // flutter.ndkVersion resolves to 28.2.13676358 in Flutter 3.27 which
+    // fails to auto-download. Pin to 27.0.12077973 — a stable LTS release
+    // that ships bundled with most Android Studio versions.
+    ndkVersion = "27.0.12077973"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -20,10 +23,7 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "com.example.face_detection"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
         targetSdk = 35
         versionCode = flutter.versionCode
@@ -32,8 +32,6 @@ android {
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
         }
     }
