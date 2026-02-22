@@ -13,36 +13,32 @@ class OvalPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    canvas.saveLayer(Rect.fromLTWH(0, 0, size.width, size.height), Paint());
-    canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height), Paint()..color = Colors.black.withOpacity(0.55));
+    final oval = OvalUtils.ovalRect(size);
 
-    final oval = OvalUtils.ovalRect(size, scale: scale);
-    canvas.drawOval(oval, Paint()..blendMode = BlendMode.clear);
-    canvas.restore();
+    // Background overlay
+    final backgroundPath = Path()
+      ..addRect(Rect.fromLTWH(0, 0, size.width, size.height))
+      ..addOval(oval)
+      ..fillType = PathFillType.evenOdd;
 
-    canvas.drawOval(
-      oval,
-      Paint()
-        ..color = color
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 3.5,
-    );
+    canvas.drawPath(backgroundPath, Paint()..color = Colors.black.withOpacity(0.7));
 
-    // Tick marks
-    final tickPaint = Paint()
-      ..color = color.withOpacity(0.7)
-      ..strokeWidth = 2.5
-      ..strokeCap = StrokeCap.round;
-    const tickLen = 12.0;
+    // Glowing Border
+    final paint = Paint()
+      ..color = color.withOpacity(0.8)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 4.0
+      ..maskFilter = const MaskFilter.blur(BlurStyle.solid, 2);
 
-    canvas.drawLine(Offset(oval.center.dx, oval.top), Offset(oval.center.dx, oval.top + tickLen), tickPaint);
-    canvas.drawLine(Offset(oval.center.dx, oval.bottom), Offset(oval.center.dx, oval.bottom - tickLen), tickPaint);
-    canvas.drawLine(Offset(oval.left, oval.center.dy), Offset(oval.left + tickLen, oval.center.dy), tickPaint);
-    canvas.drawLine(Offset(oval.right, oval.center.dy), Offset(oval.right - tickLen, oval.center.dy), tickPaint);
+    // Apply the pulse scale only to the border
+    final center = oval.center;
+    final scaledOval = Rect.fromCenter(center: center, width: oval.width * scale, height: oval.height * scale);
+
+    canvas.drawOval(scaledOval, paint);
   }
 
   @override
-  bool shouldRepaint(OvalPainter old) => old.color != color || old.scale != scale;
+  bool shouldRepaint(OvalPainter oldDelegate) => oldDelegate.color != color || oldDelegate.scale != scale;
 }
 
 // ═══════════════════════════════════════════════════════════

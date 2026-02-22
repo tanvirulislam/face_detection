@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:developer' as dev;
 import 'dart:io';
 import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:google_mlkit_image_labeling/google_mlkit_image_labeling.dart';
@@ -71,10 +72,13 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
 
     _faceDetector = FaceDetector(
       options: FaceDetectorOptions(
-        performanceMode: FaceDetectorMode.fast,
+        performanceMode: Platform.isAndroid
+            ? FaceDetectorMode
+                  .accurate // accurate gives eye probs on Android
+            : FaceDetectorMode.fast,
         enableLandmarks: true,
-        enableClassification: true,
-        enableTracking: false,
+        enableClassification: true, // This enables eye open probability
+        enableTracking: true,
       ),
     );
 
@@ -88,7 +92,6 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     ).animate(CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut));
 
     _checkCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 400));
-
     _check = CurvedAnimation(parent: _checkCtrl, curve: Curves.elasticOut);
 
     _initCamera();
@@ -108,6 +111,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
 
     final old = _controller;
     _controller = null;
+    _isStreaming = false;
 
     if (old != null) {
       try {
@@ -117,8 +121,6 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         await old.dispose();
       } catch (_) {}
     }
-
-    _isStreaming = false;
 
     if (!mounted) return;
 
@@ -157,7 +159,11 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
 
     _controller!.startImageStream((CameraImage image) async {
       _frameCount++;
-      if (_step.step != LiveStep.blinkEyes && _frameCount % 4 != 0) return;
+      if (_step.step != LiveStep.blinkEyes) {
+        if (Platform.isAndroid && _frameCount % 3 != 0) return;
+        if (!Platform.isAndroid && _frameCount % 4 != 0) return;
+      }
+
       if (_isAnalyzing || _isCapturing || _stepCooldown) return;
 
       _isAnalyzing = true;
@@ -173,7 +179,9 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     if (!_isStreaming) return;
     _isStreaming = false;
     try {
-      await _controller?.stopImageStream();
+      if (_controller != null && _controller!.value.isStreamingImages) {
+        await _controller!.stopImageStream();
+      }
     } catch (_) {}
   }
 
@@ -194,7 +202,28 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
 
       _labelFrame++;
       if (_labelFrame == 1 || _labelFrame % 10 == 0) {
-        _lastLabels = await _imageLabeler.processImage(input);
+        // Android: use rotation0deg for labeler (rotation-invariant, fixes wrong labels)
+        // iOS: use same input as face detector (already works)
+        InputImage labelerInput = input;
+        if (Platform.isAndroid) {
+          final format = InputImageFormatValue.fromRawValue(image.format.raw);
+          if (format != null) {
+            final WriteBuffer allBytes = WriteBuffer();
+            for (final plane in image.planes) {
+              allBytes.putUint8List(plane.bytes);
+            }
+            labelerInput = InputImage.fromBytes(
+              bytes: allBytes.done().buffer.asUint8List(),
+              metadata: InputImageMetadata(
+                size: Size(image.width.toDouble(), image.height.toDouble()),
+                rotation: InputImageRotation.rotation0deg,
+                format: format,
+                bytesPerRow: image.planes[0].bytesPerRow,
+              ),
+            );
+          }
+        }
+        _lastLabels = await _imageLabeler.processImage(labelerInput);
         if (_lastLabels.isNotEmpty) {
           dev.log('🏷 ${_lastLabels.map((l) => '${l.label}:${l.confidence.toStringAsFixed(2)}').join(', ')}');
         }
@@ -203,7 +232,15 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       if (!mounted) return;
 
       if (faces.isEmpty) {
-        _setFeedback('No face detected — center your face', Colors.red, false);
+        // On Android fast mode, occasional missed frames are normal — don't reset immediately
+        if (Platform.isAndroid) {
+          // Only show "no face" if we haven't detected face recently
+          if (!_faceDetected) {
+            _setFeedback('No face detected — center your face', Colors.red, false);
+          }
+        } else {
+          _setFeedback('No face detected — center your face', Colors.red, false);
+        }
         setState(() => _guardResult = FaceGuardResult.ok);
         return;
       }
@@ -215,15 +252,15 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
 
       final face = faces.first;
       final nose = face.landmarks[FaceLandmarkType.noseBase];
-      final mouthL = face.landmarks[FaceLandmarkType.leftMouth];
-      final mouthR = face.landmarks[FaceLandmarkType.rightMouth];
+      final mouthLeft = face.landmarks[FaceLandmarkType.leftMouth];
+      final mouthRight = face.landmarks[FaceLandmarkType.rightMouth];
+      final hasNose = nose != null;
+      final hasMouth = mouthLeft != null || mouthRight != null;
+      // Calculate yaw first (before the guard check)
+      double yaw = face.headEulerAngleY ?? 0;
+      if (isFront) yaw = -yaw;
 
-      final guard = _faceGuard.check(
-        face: face,
-        labels: _lastLabels,
-        hasNose: nose != null,
-        hasMouth: mouthL != null && mouthR != null,
-      );
+      final guard = _faceGuard.check(face: face, labels: _lastLabels, hasNose: hasNose, hasMouth: hasMouth, yaw: yaw);
 
       setState(() => _guardResult = guard);
 
@@ -232,10 +269,10 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         return;
       }
 
-      if (nose == null || mouthL == null || mouthR == null) {
-        _setFeedback('Keep your full face in the oval', Colors.orange, true);
-        return;
-      }
+      // if (nose == null || mouthL == null || mouthR == null) {
+      //   _setFeedback('Keep your full face in the oval', Colors.orange, true);
+      //   return;
+      // }
 
       setState(() => _faceDetected = true);
 
@@ -245,13 +282,23 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       final imgH = image.height.toDouble();
 
       final bool isPortrait = screenSize.height > screenSize.width;
-      final bool shouldSwap = Platform.isIOS && isPortrait && imgW > imgH;
+      // Fix for both iOS and Android — swap dimensions when image is landscape but screen is portrait
+      final bool shouldSwap = isPortrait && imgW > imgH;
       final double effectiveImgW = shouldSwap ? imgH : imgW;
       final double effectiveImgH = shouldSwap ? imgW : imgH;
 
+      double inputWidth, inputHeight;
+      if (Platform.isAndroid) {
+        inputWidth = imgH; // Swap for Android
+        inputHeight = imgW;
+      } else {
+        inputWidth = imgW;
+        inputHeight = imgH;
+      }
+
       final double coverScale = [
-        screenSize.width / effectiveImgW,
-        screenSize.height / effectiveImgH,
+        screenSize.width / inputWidth,
+        screenSize.height / inputHeight,
       ].reduce((a, b) => a > b ? a : b);
 
       final double scaledImgW = effectiveImgW * coverScale;
@@ -267,8 +314,9 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       double faceBottom = faceBox.bottom * coverScale - offsetY;
 
       if (isFront) {
-        final double mirroredLeft = screenSize.width - faceRight;
-        final double mirroredRight = screenSize.width - faceLeft;
+        // Both platforms need mirroring for the UI overlay to match the "Mirror" preview
+        final double mirroredLeft = screenSize.width - (faceBox.right * coverScale - offsetX);
+        final double mirroredRight = screenSize.width - (faceBox.left * coverScale - offsetX);
         faceLeft = mirroredLeft;
         faceRight = mirroredRight;
       }
@@ -304,9 +352,9 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         return;
       }
 
-      double yaw = face.headEulerAngleY ?? 0;
-      if (isFront) yaw = -yaw;
-
+      // double yaw = face.headEulerAngleY ?? 0;
+      // if (isFront) yaw = -yaw;
+      dev.log('🎯 yaw=$yaw iof=${iof.toStringAsFixed(2)} smile=${face.smilingProbability?.toStringAsFixed(2)}');
       _evaluate(face: face, yaw: yaw, smile: face.smilingProbability ?? 0.0);
     } catch (e) {
       dev.log('Frame error: $e');
@@ -314,9 +362,11 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   }
 
   void _evaluate({required Face face, required double yaw, required double smile}) {
+    dev.log(
+      '🔍 evaluate: step=${_step.step} yaw=$yaw lightingBlock=${_lightingResult.blockStep} cooldown=$_stepCooldown',
+    );
     // ⚠️ CHECK LIGHTING FIRST - BEFORE ANY STEP EVALUATION
     if (_lightingResult.blockStep) {
-      // Don't allow any step to pass if lighting is blocked
       return;
     }
 
@@ -328,10 +378,12 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         final frameGapMs = _lastFrameTime != null ? now.difference(_lastFrameTime!).inMilliseconds : 0;
         _lastFrameTime = now;
 
-        if (yaw.abs() < 12) {
-          _straightHeldMs += frameGapMs.clamp(0, 200);
+        if (yaw.abs() < 20) {
+          _straightHeldMs += frameGapMs.clamp(0, Platform.isAndroid ? 300 : 200);
+        } else if (Platform.isAndroid && yaw.abs() < 35) {
+          // Android yaw is noisy — mild tilt just pauses, doesn't reset
         } else {
-          _straightHeldMs = 0;
+          _straightHeldMs = (_straightHeldMs - 200).clamp(0, _straightRequiredMs);
           _setFeedback('Look straight at the camera', _step.color, true);
           break;
         }
@@ -357,14 +409,16 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         break;
 
       case LiveStep.turnLeft:
-        passed = yaw > 22;
+        // On Android front camera: turning head RIGHT (physically) = positive yaw
+        // Mirror preview makes it appear as left, so negative yaw = user's visual left
+        passed = Platform.isAndroid ? yaw < -18 : yaw > 18;
         if (!passed) {
           _setFeedback('Turn head more to the LEFT ⬅️', _step.color, true);
         }
         break;
 
       case LiveStep.turnRight:
-        passed = yaw < -22;
+        passed = Platform.isAndroid ? yaw > 18 : yaw < -18;
         if (!passed) {
           _setFeedback('Turn head more to the RIGHT ➡️', _step.color, true);
         }
@@ -416,8 +470,20 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     _isCapturing = true;
 
     try {
-      await _stopStream();
-      await Future.delayed(const Duration(milliseconds: 100));
+      // Safely stop stream before capture
+      if (_isStreaming) {
+        _isStreaming = false;
+        try {
+          if (_controller != null && _controller!.value.isStreamingImages) {
+            await _controller!.stopImageStream();
+          }
+        } catch (_) {}
+      }
+
+      // Give Android camera time to settle
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      if (_controller == null || !_controllerReady) return;
 
       final file = await _controller!.takePicture();
       final ts = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
@@ -434,10 +500,23 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         dev.log('📸 Right image captured');
       }
 
-      await Future.delayed(const Duration(milliseconds: 200));
-      _startStream();
+      await Future.delayed(const Duration(milliseconds: 400));
+      if (mounted && _controllerReady) {
+        _labelFrame = 0; // ← Add this line before _startStream()
+        _lastLabels = [];
+        _faceGuard.reset(); // ← optional but cleaner
+        _startStream();
+      }
     } catch (e) {
       dev.log('Step capture error: $e');
+      // Try to restart stream on error
+      await Future.delayed(const Duration(milliseconds: 500));
+      if (mounted && _controllerReady) {
+        _labelFrame = 0; // ← Add here too
+        _lastLabels = [];
+        _faceGuard.reset(); // ← optional but cleaner
+        _startStream();
+      }
     } finally {
       _isCapturing = false;
     }
@@ -475,12 +554,17 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.inactive) {
-      if (mounted) setState(() => _controllerReady = false);
-      _stopStream();
+    if (state == AppLifecycleState.inactive || state == AppLifecycleState.paused) {
+      _controllerReady = false;
+      _isStreaming = false;
+      try {
+        if (_controller != null && _controller!.value.isStreamingImages) {
+          _controller!.stopImageStream();
+        }
+      } catch (_) {}
       _controller?.dispose();
       _controller = null;
-    } else if (state == AppLifecycleState.resumed) {
+    } else if (state == AppLifecycleState.resumed && _controller == null) {
       _startCamera();
     }
   }
@@ -488,12 +572,17 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   @override
   void dispose() {
     _controllerReady = false;
+    _isStreaming = false;
     WidgetsBinding.instance.removeObserver(this);
     _pulseCtrl.dispose();
     _checkCtrl.dispose();
     _faceDetector.close();
     _imageLabeler.close();
-    _stopStream();
+    try {
+      if (_controller != null && _controller!.value.isStreamingImages) {
+        _controller!.stopImageStream();
+      }
+    } catch (_) {}
     _controller?.dispose();
     super.dispose();
   }

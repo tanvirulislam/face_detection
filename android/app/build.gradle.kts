@@ -22,12 +22,13 @@ android {
         jvmTarget = "17"
     }
 
-    defaultConfig {
+  defaultConfig {
         applicationId = "com.example.face_detection"
         minSdk = flutter.minSdkVersion
         targetSdk = 35
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        multiDexEnabled = true
     }
 
     buildTypes {
@@ -43,6 +44,7 @@ kotlin {
 
 dependencies {
     implementation("com.google.mlkit:face-detection:16.1.6")
+    implementation("androidx.multidex:multidex:2.0.1")
 }
 
 flutter {

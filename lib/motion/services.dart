@@ -1,8 +1,8 @@
 import 'dart:developer' as dev;
 import 'dart:io';
 import 'dart:math';
-import 'dart:typed_data';
 import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:google_mlkit_image_labeling/google_mlkit_image_labeling.dart';
@@ -17,6 +17,10 @@ class FaceGuard {
   static const double _sunglassMaxThresh = 0.45;
   final List<double> _eyeMaxHistory = [];
 
+  // Mouth miss streak tracking
+  int _mouthMissCount = 0;
+  static const int _mouthMissThreshold = 2;
+
   static const _nudityLabels = ['nudity', 'nude', 'naked', 'underwear', 'bikini', 'swimwear', 'lingerie', 'topless'];
   static const _maskLabels = ['mask', 'face mask', 'surgical mask', 'respirator', 'hand'];
   static const _sunglassLabels = ['sunglasses', 'goggles'];
@@ -27,8 +31,9 @@ class FaceGuard {
     required List<ImageLabel> labels,
     required bool hasNose,
     required bool hasMouth,
+    double yaw = 0.0, // ← ADD THIS
   }) {
-    // Check nudity
+    // ── 1. Nudity check ──
     for (final l in labels) {
       if (_nudityLabels.any((n) => l.label.toLowerCase().contains(n)) && l.confidence > 0.6) {
         dev.log('🚫 Nudity: ${l.label} (${l.confidence.toStringAsFixed(2)})');
@@ -40,10 +45,11 @@ class FaceGuard {
       }
     }
 
-    // Check mask/hand
+    // ── 2. Label-based mask/hand detection ──
     for (final l in labels) {
       if (_maskLabels.any((m) => l.label.toLowerCase().contains(m)) && l.confidence > 0.55) {
-        dev.log('⚠️ Mask/hand: ${l.label} (${l.confidence.toStringAsFixed(2)})');
+        dev.log('⚠️ Mask/hand label: ${l.label} (${l.confidence.toStringAsFixed(2)})');
+        _mouthMissCount = _mouthMissThreshold; // immediately trigger streak
         return const FaceGuardResult(
           warning: FaceWarning.maskCovering,
           message: '⚠️ Remove mask or hand from face.',
@@ -52,25 +58,44 @@ class FaceGuard {
       }
     }
 
-    if (!hasNose && !hasMouth) {
+    // ── 3. Landmark-based mouth covering detection ──
+    // ── 3. Landmark-based mouth covering detection ──
+    // Skip during head turns — mouth naturally disappears when yaw > 20°
+    final bool isTurning = yaw.abs() > 20;
+
+    if (!hasMouth && !isTurning) {
+      _mouthMissCount = (_mouthMissCount + 1).clamp(0, _mouthMissThreshold + 1);
+    } else {
+      _mouthMissCount = (_mouthMissCount - 1).clamp(0, _mouthMissThreshold + 1);
+    }
+
+    final leftEye = face.leftEyeOpenProbability ?? -1.0;
+    final rightEye = face.rightEyeOpenProbability ?? -1.0;
+    final eyesDetectedClearly = leftEye > 0.3 || rightEye > 0.3;
+
+    // Only trigger if NOT turning
+    if (!isTurning && _mouthMissCount >= _mouthMissThreshold && eyesDetectedClearly) {
+      dev.log('⚠️ Mouth covered — missCount=$_mouthMissCount leftEye=$leftEye rightEye=$rightEye');
+      return const FaceGuardResult(
+        warning: FaceWarning.maskCovering,
+        message: '⚠️ Remove mask or hand from face.',
+        blockStep: true,
+      );
+    }
+
+    // ── 4. Full face obscured (no nose AND no mouth) ──
+    // ── 4. Full face obscured (no nose AND no mouth) ──
+    if (!hasNose && !hasMouth && !isTurning) {
       return const FaceGuardResult(
         warning: FaceWarning.maskCovering,
         message: '⚠️ Face appears covered. Remove mask or hand.',
         blockStep: true,
       );
     }
-    if (!hasMouth && hasNose) {
-      return const FaceGuardResult(
-        warning: FaceWarning.maskCovering,
-        message: '⚠️ Remove face mask to continue.',
-        blockStep: true,
-      );
-    }
 
-    // Eye-based sunglasses detection
-    final leftEye = face.leftEyeOpenProbability ?? 1.0;
-    final rightEye = face.rightEyeOpenProbability ?? 1.0;
-    _eyeMaxHistory.add(leftEye > rightEye ? leftEye : rightEye);
+    // ── 5. Eye-based sunglasses detection (rolling window) ──
+    final eyeMax = leftEye > rightEye ? leftEye : rightEye;
+    _eyeMaxHistory.add(eyeMax < 0 ? 1.0 : eyeMax); // default to 1.0 if unavailable
     if (_eyeMaxHistory.length > _sunglassWindow) _eyeMaxHistory.removeAt(0);
 
     if (_eyeMaxHistory.length >= _sunglassWindow) {
@@ -85,10 +110,10 @@ class FaceGuard {
       }
     }
 
-    // Label-based sunglasses detection
+    // ── 6. Label-based sunglasses detection ──
     for (final l in labels) {
       if (_sunglassLabels.any((s) => l.label.toLowerCase().contains(s)) && l.confidence > 0.60) {
-        dev.log('🕶 Sunglasses: ${l.label} (${l.confidence.toStringAsFixed(2)})');
+        dev.log('🕶 Sunglasses label: ${l.label} (${l.confidence.toStringAsFixed(2)})');
         return const FaceGuardResult(
           warning: FaceWarning.sunglasses,
           message: '🕶 Remove sunglasses to continue.',
@@ -97,10 +122,10 @@ class FaceGuard {
       }
     }
 
-    // Label-based glasses detection
+    // ── 7. Label-based glasses detection ──
     for (final l in labels) {
       if (_glassLabels.any((g) => l.label.toLowerCase().contains(g)) && l.confidence > 0.65) {
-        dev.log('👓 Glasses: ${l.label} (${l.confidence.toStringAsFixed(2)})');
+        dev.log('👓 Glasses label: ${l.label} (${l.confidence.toStringAsFixed(2)})');
         return const FaceGuardResult(
           warning: FaceWarning.eyeglasses,
           message: '👓 Remove glasses to continue.',
@@ -112,7 +137,10 @@ class FaceGuard {
     return FaceGuardResult.ok;
   }
 
-  void reset() => _eyeMaxHistory.clear();
+  void reset() {
+    _eyeMaxHistory.clear();
+    _mouthMissCount = 0;
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -120,48 +148,38 @@ class FaceGuard {
 // ═══════════════════════════════════════════════════════════
 
 class BlinkDetector {
-  static const double _closedThreshold = 0.35;
-  static const double _openThreshold = 0.80;
-  static const int _cooldownMs = 600;
-
   int _blinkCount = 0;
-  bool _inBlink = false;
-  bool _cooldown = false;
-  DateTime? _blinkStart;
-
+  bool _eyesWasOpen = true;
   int get blinkCount => _blinkCount;
 
-  bool update(double? l, double? r) {
-    final avg = ((l ?? 1.0) + (r ?? 1.0)) / 2.0;
-    if (_cooldown) return false;
+  // Thresholds: 0.25 is "Closed", 0.70 is "Open"
+  void update(double? left, double? right) {
+    dev.log('👁 left=$left right=$right wasOpen=$_eyesWasOpen count=$_blinkCount');
+    if (left == null || right == null) return;
 
-    if (!_inBlink) {
-      if (avg < _closedThreshold) {
-        _inBlink = true;
-        _blinkStart = DateTime.now();
-      }
-    } else {
-      if (avg > _openThreshold) {
-        final ms = DateTime.now().difference(_blinkStart!).inMilliseconds;
-        if (ms < 800) {
-          _blinkCount++;
-          dev.log('✅ Blink #$_blinkCount (${ms}ms)');
-          _cooldown = true;
-          Future.delayed(Duration(milliseconds: _cooldownMs), () => _cooldown = false);
-        }
-        _inBlink = false;
-        return _blinkCount > 0;
-      }
-      if (DateTime.now().difference(_blinkStart!).inMilliseconds > 1000) _inBlink = false;
+    final closedThresh = Platform.isAndroid ? 0.35 : 0.25;
+    final openThresh = Platform.isAndroid ? 0.55 : 0.70;
+
+    // Android: either eye closed counts (asymmetric blink behavior on Android)
+    // iOS: both eyes must close together
+    final eyesClosed = Platform.isAndroid
+        ? (left < closedThresh || right < closedThresh)
+        : (left < closedThresh && right < closedThresh);
+
+    // Both eyes must reopen to confirm blink completed
+    final eyesOpen = left > openThresh && right > openThresh;
+
+    if (_eyesWasOpen && eyesClosed) {
+      _eyesWasOpen = false;
+    } else if (!_eyesWasOpen && eyesOpen) {
+      _blinkCount++;
+      _eyesWasOpen = true;
     }
-    return false;
   }
 
   void reset() {
     _blinkCount = 0;
-    _inBlink = false;
-    _cooldown = false;
-    _blinkStart = null;
+    _eyesWasOpen = true;
   }
 }
 
@@ -255,18 +273,29 @@ class CameraUtils {
     if (Platform.isIOS) {
       rotation = InputImageRotationValue.fromRawValue(cam.sensorOrientation);
     } else {
-      var c = cam.sensorOrientation;
-      if (cam.lensDirection == CameraLensDirection.front) c = (360 - c) % 360;
-      rotation = InputImageRotationValue.fromRawValue(c);
+      // Android: for front camera NV21 stream, rotation should be 270
+      // The formula (360 - sensorOrientation) % 360 is incorrect for most devices
+      int rotationCompensation = cam.sensorOrientation;
+      if (cam.lensDirection == CameraLensDirection.front) {
+        // For NV21 front camera: use sensorOrientation directly (NOT mirrored)
+        rotationCompensation = cam.sensorOrientation;
+      }
+      rotation = InputImageRotationValue.fromRawValue(rotationCompensation);
     }
 
     if (rotation == null) return null;
     final format = InputImageFormatValue.fromRawValue(image.format.raw);
     if (format == null) return null;
 
-    if (image.planes.length == 1) {
+    // ── Android: merge all planes with WriteBuffer ──
+    if (Platform.isAndroid) {
+      final WriteBuffer allBytes = WriteBuffer();
+      for (final plane in image.planes) {
+        allBytes.putUint8List(plane.bytes);
+      }
+      final bytes = allBytes.done().buffer.asUint8List();
       return InputImage.fromBytes(
-        bytes: image.planes[0].bytes,
+        bytes: bytes,
         metadata: InputImageMetadata(
           size: Size(image.width.toDouble(), image.height.toDouble()),
           rotation: rotation,
@@ -276,9 +305,9 @@ class CameraUtils {
       );
     }
 
-    final all = image.planes.fold<List<int>>([], (p, pl) => p..addAll(pl.bytes));
+    // ── iOS: always single plane ──
     return InputImage.fromBytes(
-      bytes: Uint8List.fromList(all),
+      bytes: image.planes[0].bytes,
       metadata: InputImageMetadata(
         size: Size(image.width.toDouble(), image.height.toDouble()),
         rotation: rotation,
