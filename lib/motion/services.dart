@@ -32,24 +32,32 @@ class FaceGuard {
     required bool hasNose,
     required bool hasMouth,
     double yaw = 0.0, // ← ADD THIS
+    bool faceInOval = false, // ← ADD THIS PARAMETER
   }) {
     // ── 1. Nudity check ──
-    for (final l in labels) {
-      if (_nudityLabels.any((n) => l.label.toLowerCase().contains(n)) && l.confidence > 0.6) {
-        dev.log('🚫 Nudity: ${l.label} (${l.confidence.toStringAsFixed(2)})');
-        return const FaceGuardResult(
-          warning: FaceWarning.nudity,
-          message: '🚫 Nudity detected. Please dress appropriately.',
-          blockStep: true,
-        );
-      }
+    // ── 1. Nudity check ──
+    final hasExplicitNudity = labels.any(
+      (l) => _nudityLabels.any((n) => l.label.toLowerCase().contains(n)) && l.confidence > 0.6,
+    );
+    final hasFlesh = labels.any((l) => l.label.toLowerCase().contains('flesh') && l.confidence > 0.65);
+    final hasMuscle = labels.any((l) => l.label.toLowerCase().contains('muscle') && l.confidence > 0.80);
+
+    if (hasExplicitNudity || (hasFlesh && hasMuscle)) {
+      dev.log('🚫 Nudity/shirtless detected — flesh=$hasFlesh muscle=$hasMuscle explicit=$hasExplicitNudity');
+      return const FaceGuardResult(
+        warning: FaceWarning.nudity,
+        message: '🚫 Please wear appropriate clothing.',
+        blockStep: true,
+      );
     }
 
     // ── 2. Label-based mask/hand detection ──
     for (final l in labels) {
       if (_maskLabels.any((m) => l.label.toLowerCase().contains(m)) && l.confidence > 0.55) {
+        // ── Only warn about hand/mask if face is actually in the oval ──
+        if (!faceInOval) break;
         dev.log('⚠️ Mask/hand label: ${l.label} (${l.confidence.toStringAsFixed(2)})');
-        _mouthMissCount = _mouthMissThreshold; // immediately trigger streak
+        _mouthMissCount = _mouthMissThreshold;
         return const FaceGuardResult(
           warning: FaceWarning.maskCovering,
           message: '⚠️ Remove mask or hand from face.',

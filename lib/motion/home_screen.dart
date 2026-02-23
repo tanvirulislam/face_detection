@@ -1,19 +1,22 @@
 import 'dart:io';
 
+import 'package:camera/camera.dart';
+import 'package:face_detection/motion/save_photo_provider.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'camera_widget.dart';
 import 'models.dart';
 
-class HomeScreen extends StatefulWidget {
+class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
 
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  ConsumerState<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends ConsumerState<HomeScreen> {
   String _verificationStatus = "Not verified";
-  VerificationResult? _verificationResult;
+  // VerificationResult? _verificationResult;
 
   Future<void> _startFaceVerification() async {
     final result = await Navigator.push<VerificationResult>(
@@ -24,7 +27,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (result != null) {
       setState(() {
         _verificationStatus = "Verified Successfully ✓";
-        _verificationResult = result;
+        // _verificationResult = result;
       });
       _showSuccessDialog();
     }
@@ -51,6 +54,9 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     final isVerified = _verificationStatus.contains("Successfully");
 
+    final frontImage = ref.watch(clickedPhotoProvider('front'));
+    final leftImage = ref.watch(clickedPhotoProvider('left'));
+    final rightImage = ref.watch(clickedPhotoProvider('right'));
     return Scaffold(
       appBar: AppBar(title: const Text('Face Verification'), centerTitle: true, elevation: 0),
       body: SafeArea(
@@ -109,7 +115,7 @@ class _HomeScreenState extends State<HomeScreen> {
               const SizedBox(height: 32),
 
               // DISPLAY 3 CAPTURED IMAGES
-              if (_verificationResult != null) ...[
+              if (frontImage != null || leftImage != null || rightImage != null) ...[
                 Container(
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
@@ -128,9 +134,9 @@ class _HomeScreenState extends State<HomeScreen> {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                         children: [
-                          _buildImagePreview('Front', _verificationResult!.frontImage.path),
-                          _buildImagePreview('Left', _verificationResult!.leftImage.path),
-                          _buildImagePreview('Right', _verificationResult!.rightImage.path),
+                          _buildImagePreview('Front', frontImage),
+                          _buildImagePreview('Left', leftImage),
+                          _buildImagePreview('Right', rightImage),
                         ],
                       ),
                     ],
@@ -191,7 +197,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildImagePreview(String label, String imagePath) {
+  Widget _buildImagePreview(String label, XFile? file) {
     return Column(
       children: [
         Container(
@@ -200,8 +206,14 @@ class _HomeScreenState extends State<HomeScreen> {
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(12),
             border: Border.all(color: Colors.green.shade300, width: 2),
-            image: DecorationImage(image: FileImage(File(imagePath)), fit: BoxFit.cover),
+            color: Colors.grey.shade200,
           ),
+          child: file != null
+              ? ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: Image.file(File(file.path), fit: BoxFit.cover),
+                )
+              : const Center(child: Icon(Icons.image_not_supported_outlined, color: Colors.grey)),
         ),
         const SizedBox(height: 8),
         Text(

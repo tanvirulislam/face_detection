@@ -8,7 +8,7 @@ import 'package:camera/camera.dart';
 
 enum FaceType { front, back }
 
-enum LiveStep { lookStraight, blinkEyes, turnLeft, turnRight, smile }
+enum LiveStep { lookStraight, blinkEyes, turnLeft, turnRight }
 
 // ADD lowLight here ↓
 enum FaceWarning {
@@ -35,11 +35,10 @@ class StepConfig {
 }
 
 const List<StepConfig> kSteps = [
-  StepConfig(LiveStep.lookStraight, 'Look straight at the camera', Icons.face, Color(0xFF2196F3)),
+  StepConfig(LiveStep.lookStraight, 'Look straight & smile at the camera 😊', Icons.face, Color(0xFF2196F3)),
   StepConfig(LiveStep.blinkEyes, 'Blink your eyes twice', Icons.remove_red_eye, Color(0xFF9C27B0)),
   StepConfig(LiveStep.turnLeft, 'Slowly turn head LEFT ⬅️', Icons.arrow_back, Color(0xFFFF9800)),
   StepConfig(LiveStep.turnRight, 'Slowly turn head RIGHT ➡️', Icons.arrow_forward, Color(0xFFFF5722)),
-  StepConfig(LiveStep.smile, 'Give a natural smile 😊', Icons.sentiment_satisfied, Color(0xFF4CAF50)),
 ];
 
 class FaceGuardResult {

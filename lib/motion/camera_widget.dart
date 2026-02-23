@@ -2,25 +2,29 @@ import 'dart:async';
 import 'dart:developer' as dev;
 import 'dart:io';
 import 'package:camera/camera.dart';
+import 'package:face_detection/motion/captured_image_validation.dart';
+import 'package:face_detection/motion/save_photo_provider.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:google_mlkit_image_labeling/google_mlkit_image_labeling.dart';
 import 'package:intl/intl.dart';
 
+// import 'capture_validator.dart';
 import 'models.dart';
 import 'services.dart';
 import 'widgets.dart';
 
-class CameraScreen extends StatefulWidget {
+class CameraScreen extends ConsumerStatefulWidget {
   const CameraScreen({super.key, required this.faceType});
   final FaceType faceType;
 
   @override
-  State<CameraScreen> createState() => _CameraScreenState();
+  ConsumerState<CameraScreen> createState() => _CameraScreenState();
 }
 
-class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver, TickerProviderStateMixin {
+class _CameraScreenState extends ConsumerState<CameraScreen> with WidgetsBindingObserver, TickerProviderStateMixin {
   CameraController? _controller;
   List<CameraDescription> _cameras = [];
   int _cameraIndex = 0;
@@ -32,12 +36,24 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   double _lastLeftEyeProb = 1.0;
   double _lastRightEyeProb = 1.0;
   bool _eyesClosedWarning = false;
-  // Add this field at the top of your state class
+  bool _showCaptureLoader = false;
+  double _captureProgress = 0.0;
+
+  // Validation state
+  bool _showValidationResult = false;
+  bool _validationPassed = false;
+  String _validationMessage = '';
+  FaceWarning _validationWarning = FaceWarning.none;
+  int _validationRetryCount = 0;
+  static const int _maxValidationRetries = 3;
+
   int _eyeOpenRetryCount = 0;
   static const int _maxEyeOpenRetries = 5;
 
   late final FaceDetector _faceDetector;
   late final ImageLabeler _imageLabeler;
+  late final CapturedImageValidator _captureValidator;
+
   final FaceGuard _faceGuard = FaceGuard();
   final BlinkDetector _blinkDetector = BlinkDetector();
   final BrightnessChecker _brightnessChecker = BrightnessChecker();
@@ -53,7 +69,6 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   int _straightHeldMs = 0;
   DateTime? _lastFrameTime;
 
-  // CAPTURED IMAGES
   XFile? _frontImage;
   XFile? _leftImage;
   XFile? _rightImage;
@@ -78,20 +93,17 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
 
     _faceDetector = FaceDetector(
       options: FaceDetectorOptions(
-        performanceMode: Platform.isAndroid
-            ? FaceDetectorMode
-                  .accurate // accurate gives eye probs on Android
-            : FaceDetectorMode.fast,
+        performanceMode: Platform.isAndroid ? FaceDetectorMode.accurate : FaceDetectorMode.fast,
         enableLandmarks: true,
-        enableClassification: true, // This enables eye open probability
+        enableClassification: true,
         enableTracking: true,
       ),
     );
 
     _imageLabeler = ImageLabeler(options: ImageLabelerOptions(confidenceThreshold: 0.5));
+    _captureValidator = CapturedImageValidator();
 
     _pulseCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1200))..repeat(reverse: true);
-
     _pulse = Tween<double>(
       begin: 1.0,
       end: 1.035,
@@ -201,7 +213,6 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     if (!mounted || !_controllerReady) return;
 
     try {
-      // CHECK BRIGHTNESS FIRST
       final lightingCheck = _brightnessChecker.checkLighting(image);
       setState(() => _lightingResult = lightingCheck);
 
@@ -214,8 +225,6 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
 
       _labelFrame++;
       if (_labelFrame == 1 || _labelFrame % 10 == 0) {
-        // Android: use rotation0deg for labeler (rotation-invariant, fixes wrong labels)
-        // iOS: use same input as face detector (already works)
         InputImage labelerInput = input;
         if (Platform.isAndroid) {
           final format = InputImageFormatValue.fromRawValue(image.format.raw);
@@ -244,15 +253,12 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       if (!mounted) return;
 
       if (faces.isEmpty) {
-        // On Android fast mode, occasional missed frames are normal — don't reset immediately
         if (Platform.isAndroid) {
-          // Only show "no face" if we haven't detected face recently
-          if (!_faceDetected) {
-            _setFeedback('No face detected — center your face', Colors.red, false);
-          }
+          if (!_faceDetected) _setFeedback('Move your face into the camera', Colors.red, false);
         } else {
-          _setFeedback('No face detected — center your face', Colors.red, false);
+          _setFeedback('Move your face into the camera', Colors.red, false);
         }
+        if (_eyesClosedWarning) setState(() => _eyesClosedWarning = false);
         setState(() => _guardResult = FaceGuardResult.ok);
         return;
       }
@@ -264,60 +270,38 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
 
       final face = faces.first;
 
-      // ── Track eye probabilities for iOS capture-time guard ──
-      // ── Track eye probabilities for capture-time guard ──
-      if (face.leftEyeOpenProbability != null) {
-        _lastLeftEyeProb = face.leftEyeOpenProbability!;
-      }
-      if (face.rightEyeOpenProbability != null) {
-        _lastRightEyeProb = face.rightEyeOpenProbability!;
-      }
+      if (face.leftEyeOpenProbability != null) _lastLeftEyeProb = face.leftEyeOpenProbability!;
+      if (face.rightEyeOpenProbability != null) _lastRightEyeProb = face.rightEyeOpenProbability!;
 
-      // ── Real-time eyes closed warning (both platforms) ──
       if (_step.step == LiveStep.lookStraight) {
         final eyeClosedThresh = Platform.isAndroid ? 0.35 : 0.4;
         final eyesClosed = _lastLeftEyeProb < eyeClosedThresh || _lastRightEyeProb < eyeClosedThresh;
-        if (eyesClosed != _eyesClosedWarning) {
-          setState(() => _eyesClosedWarning = eyesClosed);
-        }
+        if (eyesClosed != _eyesClosedWarning) setState(() => _eyesClosedWarning = eyesClosed);
       } else {
         if (_eyesClosedWarning) setState(() => _eyesClosedWarning = false);
       }
+
       final nose = face.landmarks[FaceLandmarkType.noseBase];
       final mouthLeft = face.landmarks[FaceLandmarkType.leftMouth];
       final mouthRight = face.landmarks[FaceLandmarkType.rightMouth];
       final hasNose = nose != null;
       final hasMouth = mouthLeft != null || mouthRight != null;
 
-      // Calculate yaw first (before the guard check)
       double yaw = face.headEulerAngleY ?? 0;
       if (isFront) yaw = -yaw;
 
-      final guard = _faceGuard.check(face: face, labels: _lastLabels, hasNose: hasNose, hasMouth: hasMouth, yaw: yaw);
-
-      setState(() => _guardResult = guard);
-
-      if (guard.blockStep) {
-        _setFeedback(guard.message, Colors.red, true);
-        return;
-      }
-
-      setState(() => _faceDetected = true);
-
-      // Face containment check
       final screenSize = MediaQuery.of(context).size;
       final imgW = image.width.toDouble();
       final imgH = image.height.toDouble();
 
       final bool isPortrait = screenSize.height > screenSize.width;
-      // Fix for both iOS and Android — swap dimensions when image is landscape but screen is portrait
       final bool shouldSwap = isPortrait && imgW > imgH;
       final double effectiveImgW = shouldSwap ? imgH : imgW;
       final double effectiveImgH = shouldSwap ? imgW : imgH;
 
       double inputWidth, inputHeight;
       if (Platform.isAndroid) {
-        inputWidth = imgH; // Swap for Android
+        inputWidth = imgH;
         inputHeight = imgW;
       } else {
         inputWidth = imgW;
@@ -342,7 +326,6 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       double faceBottom = faceBox.bottom * coverScale - offsetY;
 
       if (isFront) {
-        // Both platforms need mirroring for the UI overlay to match the "Mirror" preview
         final double mirroredLeft = screenSize.width - (faceBox.right * coverScale - offsetX);
         final double mirroredRight = screenSize.width - (faceBox.left * coverScale - offsetX);
         faceLeft = mirroredLeft;
@@ -351,7 +334,6 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
 
       final Rect faceScreenRect = Rect.fromLTRB(faceLeft, faceTop, faceRight, faceBottom);
       final Rect oval = OvalUtils.ovalRect(screenSize);
-
       final Rect intersection = faceScreenRect.intersect(oval);
       final double faceArea = faceScreenRect.width * faceScreenRect.height;
       final double iof = faceArea > 0
@@ -360,6 +342,24 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
           : 0.0;
 
       dev.log('📐 IoF=${iof.toStringAsFixed(2)}');
+
+      final guard = _faceGuard.check(
+        face: face,
+        labels: _lastLabels,
+        hasNose: hasNose,
+        hasMouth: hasMouth,
+        yaw: yaw,
+        faceInOval: iof >= 0.75,
+      );
+
+      setState(() => _guardResult = guard);
+
+      if (guard.blockStep) {
+        _setFeedback(guard.message, Colors.red, true);
+        return;
+      }
+
+      setState(() => _faceDetected = true);
 
       if (iof < 0.75) {
         String hint = 'Move your face into the oval';
@@ -391,9 +391,8 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     dev.log(
       '🔍 evaluate: step=${_step.step} yaw=$yaw lightingBlock=${_lightingResult.blockStep} cooldown=$_stepCooldown',
     );
-    if (_lightingResult.blockStep) {
-      return;
-    }
+
+    if (_lightingResult.blockStep) return;
 
     bool passed = false;
 
@@ -403,16 +402,21 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         final frameGapMs = _lastFrameTime != null ? now.difference(_lastFrameTime!).inMilliseconds : 0;
         _lastFrameTime = now;
 
-        // ── Pause progress when eyes are closed ──
         if (_eyesClosedWarning) {
           _setFeedback('Keep your eyes open! 👀', Colors.orange, true);
+          break;
+        }
+
+        if (smile < 0.30) {
+          _straightHeldMs = 0;
+          _setFeedback('Please smile 😊', _step.color, true);
           break;
         }
 
         if (yaw.abs() < 20) {
           _straightHeldMs += frameGapMs.clamp(0, Platform.isAndroid ? 300 : 200);
         } else if (Platform.isAndroid && yaw.abs() < 35) {
-          // Android yaw is noisy — mild tilt just pauses, doesn't reset
+          // mild tilt on Android just pauses
         } else {
           _straightHeldMs = (_straightHeldMs - 200).clamp(0, _straightRequiredMs);
           _setFeedback('Look straight at the camera', _step.color, true);
@@ -431,6 +435,10 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         break;
 
       case LiveStep.blinkEyes:
+        if (yaw.abs() > 20) {
+          _setFeedback('Face straight first, then blink 👀', _step.color, true);
+          break;
+        }
         _blinkDetector.update(face.leftEyeOpenProbability, face.rightEyeOpenProbability);
         passed = _blinkDetector.blinkCount >= 2;
         if (!passed) {
@@ -441,23 +449,12 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
 
       case LiveStep.turnLeft:
         passed = Platform.isAndroid ? yaw < -18 : yaw > 18;
-        if (!passed) {
-          _setFeedback('Turn head more to the LEFT ⬅️', _step.color, true);
-        }
+        if (!passed) _setFeedback('Turn head more to the LEFT ⬅️', _step.color, true);
         break;
 
       case LiveStep.turnRight:
         passed = Platform.isAndroid ? yaw > 18 : yaw < -18;
-        if (!passed) {
-          _setFeedback('Turn head more to the RIGHT ➡️', _step.color, true);
-        }
-        break;
-
-      case LiveStep.smile:
-        passed = smile > 0.75;
-        if (!passed) {
-          _setFeedback('Smile a little more 😊', _step.color, true);
-        }
+        if (!passed) _setFeedback('Turn head more to the RIGHT ➡️', _step.color, true);
         break;
     }
 
@@ -475,13 +472,11 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     Future.delayed(const Duration(milliseconds: 700), () async {
       if (!mounted) return;
 
-      // CAPTURE IMAGES FOR SPECIFIC STEPS
       if (_step.step == LiveStep.lookStraight || _step.step == LiveStep.turnLeft || _step.step == LiveStep.turnRight) {
         final captured = await _captureStepImage();
-        // ── If capture was skipped (e.g. eyes closed), do NOT advance step ──
         if (!captured) return;
         _eyeOpenRetryCount = 0;
-        setState(() => _eyesClosedWarning = false); // ← ADD
+        setState(() => _eyesClosedWarning = false);
       }
 
       if (_stepIndex < kSteps.length - 1) {
@@ -490,6 +485,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
           _statusText = kSteps[_stepIndex].instruction;
           _ovalColor = kSteps[_stepIndex].color;
           _feedbackSeq++;
+          _validationRetryCount = 0; // reset retry count for new step
         });
         _stepCooldown = false;
       } else {
@@ -498,22 +494,20 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     });
   }
 
+  // ─────────────────────────────────────────────────────────
+  // CAPTURE + VALIDATE
+  // ─────────────────────────────────────────────────────────
+
   Future<bool> _captureStepImage() async {
     if (_isCapturing) return false;
 
-    // ── iOS: Guard against closed-eye capture on front/straight image ──
+    // Eyes check (lookStraight only)
     if (_step.step == LiveStep.lookStraight) {
       final captureEyeThresh = Platform.isAndroid ? 0.35 : 0.5;
       if (_lastLeftEyeProb < captureEyeThresh || _lastRightEyeProb < captureEyeThresh) {
         _eyeOpenRetryCount++;
-        dev.log(
-          '👁 Eyes closed at capture time — retry $_eyeOpenRetryCount/$_maxEyeOpenRetries left=$_lastLeftEyeProb right=$_lastRightEyeProb',
-        );
-
         if (_eyeOpenRetryCount >= _maxEyeOpenRetries) {
-          dev.log('👁 Max retries reached — capturing despite low eye prob');
           _eyeOpenRetryCount = 0;
-          // Fall through to capture
         } else {
           _straightHeldMs = 0;
           _lastFrameTime = null;
@@ -531,6 +525,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     _isCapturing = true;
 
     try {
+      // Stop stream before capturing
       if (_isStreaming) {
         _isStreaming = false;
         try {
@@ -540,67 +535,171 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         } catch (_) {}
       }
 
-      await Future.delayed(const Duration(milliseconds: 300));
+      await Future.delayed(const Duration(milliseconds: 200));
 
       if (_controller == null || !_controllerReady) return false;
 
+      // ── CAPTURE ──
       final file = await _controller!.takePicture();
       final ts = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
       final bytes = await file.readAsBytes();
+      final capturedFile = XFile(file.path, name: '${_step.step.name}_$ts.jpeg', bytes: bytes);
 
-      if (_step.step == LiveStep.lookStraight) {
-        _frontImage = XFile(file.path, name: 'front_$ts.jpeg', bytes: bytes);
-        dev.log('📸 Front image captured');
-      } else if (_step.step == LiveStep.turnLeft) {
-        _leftImage = XFile(file.path, name: 'left_$ts.jpeg', bytes: bytes);
-        dev.log('📸 Left image captured');
-      } else if (_step.step == LiveStep.turnRight) {
-        _rightImage = XFile(file.path, name: 'right_$ts.jpeg', bytes: bytes);
-        dev.log('📸 Right image captured');
+      // ── SHOW progress loader ──
+      setState(() {
+        _showCaptureLoader = true;
+        _captureProgress = 0.0;
+      });
+
+      await _animateCaptureProgress(0.0, 0.5, const Duration(milliseconds: 300));
+
+      // ── VALIDATE captured image (full pipeline) ──
+      final screenSize = MediaQuery.of(context).size;
+      final validationResult = await _captureValidator.validate(capturedFile, _step.step, screenSize);
+
+      await _animateCaptureProgress(0.5, 1.0, const Duration(milliseconds: 300));
+      await Future.delayed(const Duration(milliseconds: 150));
+
+      setState(() => _showCaptureLoader = false);
+
+      if (!validationResult.isValid) {
+        // ── Validation FAILED ──
+        _validationRetryCount++;
+        dev.log('❌ Capture validation failed (attempt $_validationRetryCount): ${validationResult.failureReason}');
+
+        final retryMessage = _validationRetryCount >= _maxValidationRetries
+            ? '⚠️ Please try again carefully'
+            : '❌ Wrong pose captured — ${validationResult.failureReason ?? "Try again"}';
+
+        // Show failure banner briefly
+        await _showValidationBanner(
+          passed: false,
+          message: retryMessage,
+          warning: validationResult.warning ?? FaceWarning.none,
+        );
+
+        // Reset step so user must redo it
+        await _resetCurrentStep();
+        return false;
       }
 
-      await Future.delayed(const Duration(milliseconds: 400));
+      // ── Validation PASSED ──
+      dev.log('✅ Capture validated: step=${_step.step} yaw=${validationResult.detectedYaw?.toStringAsFixed(1)}°');
+
+      // Store the validated image
+      if (_step.step == LiveStep.lookStraight) {
+        _frontImage = capturedFile;
+      } else if (_step.step == LiveStep.turnLeft) {
+        _leftImage = capturedFile;
+      } else if (_step.step == LiveStep.turnRight) {
+        _rightImage = capturedFile;
+      }
+
+      _validationRetryCount = 0;
+
+      // Show success banner briefly
+      await _showValidationBanner(passed: true, message: '✅ Image verified!');
+
+      // Restart stream for next step
+      await Future.delayed(const Duration(milliseconds: 300));
       if (mounted && _controllerReady) {
         _labelFrame = 0;
         _lastLabels = [];
         _faceGuard.reset();
-        // ── Android: camera session may break after takePicture ──
         try {
           _startStream();
         } catch (e) {
-          dev.log('Stream restart failed after capture — reinitializing camera: $e');
           await _startCamera();
         }
       }
+
       return true;
     } catch (e) {
       dev.log('Step capture error: $e');
-      await Future.delayed(const Duration(milliseconds: 500));
-      if (mounted) {
-        _labelFrame = 0;
-        _lastLabels = [];
-        _faceGuard.reset();
-        // ── Reinitialize camera fully on error (handles Android broken pipe) ──
-        try {
-          if (_controllerReady) {
-            _startStream();
-          } else {
-            await _startCamera();
-          }
-        } catch (e2) {
-          dev.log('Stream restart failed after capture error — reinitializing camera: $e2');
-          await _startCamera();
-        }
-      }
+      setState(() => _showCaptureLoader = false);
+      await _resetCurrentStep();
       return false;
     } finally {
       _isCapturing = false;
     }
   }
 
+  /// Shows a brief validation result banner (pass/fail) for 1.2 seconds.
+  Future<void> _showValidationBanner({
+    required bool passed,
+    required String message,
+    FaceWarning warning = FaceWarning.none,
+  }) async {
+    if (!mounted) return;
+    setState(() {
+      _showValidationResult = true;
+      _validationPassed = passed;
+      _validationMessage = message;
+      _validationWarning = warning;
+    });
+    await Future.delayed(const Duration(milliseconds: 1200));
+    if (mounted) setState(() => _showValidationResult = false);
+  }
+
+  /// Resets the current step so the user must redo the pose.
+  Future<void> _resetCurrentStep() async {
+    if (!mounted) return;
+
+    // Determine retry instruction
+    String retryInstruction;
+    switch (_step.step) {
+      case LiveStep.lookStraight:
+        retryInstruction = 'Look straight & smile — try again 😊';
+        break;
+      case LiveStep.turnLeft:
+        retryInstruction = 'Turn more to the LEFT ⬅️ — try again';
+        break;
+      case LiveStep.turnRight:
+        retryInstruction = 'Turn more to the RIGHT ➡️ — try again';
+        break;
+      default:
+        retryInstruction = _step.instruction;
+    }
+
+    setState(() {
+      _stepCooldown = false;
+      _straightHeldMs = 0;
+      _lastFrameTime = null;
+      _statusText = retryInstruction;
+      _ovalColor = _step.color;
+      _feedbackSeq++;
+      _faceDetected = false;
+    });
+
+    _blinkDetector.reset();
+    _faceGuard.reset();
+    _labelFrame = 0;
+    _lastLabels = [];
+
+    await Future.delayed(const Duration(milliseconds: 400));
+
+    if (mounted && _controllerReady) {
+      try {
+        _startStream();
+      } catch (_) {
+        await _startCamera();
+      }
+    }
+  }
+
+  Future<void> _animateCaptureProgress(double from, double to, Duration duration) async {
+    final steps = 20;
+    final stepDuration = duration.inMilliseconds ~/ steps;
+    final increment = (to - from) / steps;
+    for (int i = 0; i < steps; i++) {
+      await Future.delayed(Duration(milliseconds: stepDuration));
+      if (!mounted) return;
+      setState(() => _captureProgress = from + increment * (i + 1));
+    }
+  }
+
   Future<void> _finishVerification() async {
     _setFeedback('✅ Verification Complete!', Colors.green, true);
-
     setState(() {
       _statusText = '✅ Verified!';
       _ovalColor = Colors.green;
@@ -610,6 +709,10 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     await Future.delayed(const Duration(milliseconds: 900));
 
     if (mounted && _frontImage != null && _leftImage != null && _rightImage != null) {
+      ref.read(clickedPhotoProvider('front').notifier).setImage(_frontImage);
+      ref.read(clickedPhotoProvider('left').notifier).setImage(_leftImage);
+      ref.read(clickedPhotoProvider('right').notifier).setImage(_rightImage);
+
       final result = VerificationResult(frontImage: _frontImage!, leftImage: _leftImage!, rightImage: _rightImage!);
       Navigator.pop(context, result);
     } else {
@@ -654,6 +757,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     _checkCtrl.dispose();
     _faceDetector.close();
     _imageLabeler.close();
+    _captureValidator.dispose();
     try {
       if (_controller != null && _controller!.value.isStreamingImages) {
         _controller!.stopImageStream();
@@ -662,6 +766,10 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     _controller?.dispose();
     super.dispose();
   }
+
+  // ─────────────────────────────────────────────────────────
+  // BUILD
+  // ─────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -674,8 +782,6 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
 
   Widget _buildBody() {
     final size = MediaQuery.of(context).size;
-
-    // Determine which warning to show (priority: guard > lighting)
     final activeWarning = _guardResult.blockStep ? _guardResult : _lightingResult;
 
     return Stack(
@@ -699,7 +805,9 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
             child: const SizedBox.expand(),
           ),
         ),
-        if (_eyesClosedWarning)
+
+        // Eyes closed warning
+        if (_eyesClosedWarning && _faceDetected)
           Positioned(
             top: activeWarning.warning != FaceWarning.none ? 140 : 80,
             left: 16,
@@ -724,6 +832,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
               ),
             ),
           ),
+
         // Face alignment hint
         if (!_faceDetected)
           Positioned.fill(
@@ -742,7 +851,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
                           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
                           decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(20)),
                           child: const Text(
-                            'Align your full face inside the oval',
+                            '📷 Move your face into the oval',
                             style: TextStyle(color: Colors.white70, fontSize: 12),
                           ),
                         ),
@@ -921,6 +1030,102 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
             ),
           ),
         ),
+
+        // Capture loader with validation progress
+        if (_showCaptureLoader)
+          Positioned.fill(
+            child: Container(
+              color: Colors.black54,
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(
+                      width: 100,
+                      height: 100,
+                      child: TweenAnimationBuilder<double>(
+                        tween: Tween(begin: 0, end: _captureProgress),
+                        duration: const Duration(milliseconds: 80),
+                        builder: (_, value, __) => CircularProgressIndicator(
+                          value: value,
+                          strokeWidth: 7,
+                          backgroundColor: Colors.white24,
+                          valueColor: const AlwaysStoppedAnimation<Color>(Colors.greenAccent),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    Text(
+                      _captureProgress < 0.55 ? 'Capturing…' : 'Verifying pose…',
+                      style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+
+        // ── Validation result banner ──
+        if (_showValidationResult)
+          Positioned.fill(
+            child: IgnorePointer(
+              child: AnimatedOpacity(
+                opacity: _showValidationResult ? 1.0 : 0.0,
+                duration: const Duration(milliseconds: 200),
+                child: Container(
+                  color: Colors.black45,
+                  child: Center(
+                    child: Container(
+                      margin: const EdgeInsets.symmetric(horizontal: 32),
+                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+                      decoration: BoxDecoration(
+                        color: _validationPassed ? Colors.green.shade700 : Colors.red.shade700,
+                        borderRadius: BorderRadius.circular(20),
+                        boxShadow: [
+                          BoxShadow(
+                            color: (_validationPassed ? Colors.green : Colors.red).withOpacity(0.5),
+                            blurRadius: 24,
+                            spreadRadius: 2,
+                          ),
+                        ],
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            _validationPassed
+                                ? Icons.check_circle
+                                : _validationWarning == FaceWarning.sunglasses
+                                ? Icons.wb_sunny_outlined
+                                : _validationWarning == FaceWarning.eyeglasses
+                                ? Icons.visibility_outlined
+                                : _validationWarning == FaceWarning.maskCovering
+                                ? Icons.face_retouching_off
+                                : _validationWarning == FaceWarning.lowLight
+                                ? Icons.lightbulb_outline
+                                : _validationWarning == FaceWarning.nudity
+                                ? Icons.warning_rounded
+                                : _validationWarning == FaceWarning.eyesClosed
+                                ? Icons.remove_red_eye_outlined
+                                : Icons.cancel,
+                            color: Colors.white,
+                            size: 32,
+                          ),
+                          const SizedBox(width: 14),
+                          Flexible(
+                            child: Text(
+                              _validationMessage,
+                              style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
       ],
     );
   }
