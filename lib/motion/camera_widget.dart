@@ -29,6 +29,12 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   bool _isCapturing = false;
   int _frameCount = 0;
   bool _controllerReady = false;
+  double _lastLeftEyeProb = 1.0;
+  double _lastRightEyeProb = 1.0;
+  bool _eyesClosedWarning = false;
+  // Add this field at the top of your state class
+  int _eyeOpenRetryCount = 0;
+  static const int _maxEyeOpenRetries = 5;
 
   late final FaceDetector _faceDetector;
   late final ImageLabeler _imageLabeler;
@@ -157,22 +163,28 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     if (_isStreaming || _controller == null || !_controllerReady) return;
     _isStreaming = true;
 
-    _controller!.startImageStream((CameraImage image) async {
-      _frameCount++;
-      if (_step.step != LiveStep.blinkEyes) {
-        if (Platform.isAndroid && _frameCount % 3 != 0) return;
-        if (!Platform.isAndroid && _frameCount % 4 != 0) return;
-      }
-
-      if (_isAnalyzing || _isCapturing || _stepCooldown) return;
-
-      _isAnalyzing = true;
-      try {
-        await _processFrame(image);
-      } finally {
-        _isAnalyzing = false;
-      }
-    });
+    try {
+      _controller!.startImageStream((CameraImage image) async {
+        _frameCount++;
+        if (_step.step != LiveStep.blinkEyes) {
+          if (Platform.isAndroid && _frameCount % 3 != 0) return;
+          if (!Platform.isAndroid && _frameCount % 4 != 0) return;
+        }
+        if (_isAnalyzing || _isCapturing || _stepCooldown) return;
+        _isAnalyzing = true;
+        try {
+          await _processFrame(image);
+        } finally {
+          _isAnalyzing = false;
+        }
+      });
+    } catch (e) {
+      dev.log('startImageStream failed — reinitializing camera: $e');
+      _isStreaming = false;
+      Future.microtask(() async {
+        if (mounted) await _startCamera();
+      });
+    }
   }
 
   Future<void> _stopStream() async {
@@ -251,11 +263,32 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       }
 
       final face = faces.first;
+
+      // ── Track eye probabilities for iOS capture-time guard ──
+      // ── Track eye probabilities for capture-time guard ──
+      if (face.leftEyeOpenProbability != null) {
+        _lastLeftEyeProb = face.leftEyeOpenProbability!;
+      }
+      if (face.rightEyeOpenProbability != null) {
+        _lastRightEyeProb = face.rightEyeOpenProbability!;
+      }
+
+      // ── Real-time eyes closed warning (both platforms) ──
+      if (_step.step == LiveStep.lookStraight) {
+        final eyeClosedThresh = Platform.isAndroid ? 0.35 : 0.4;
+        final eyesClosed = _lastLeftEyeProb < eyeClosedThresh || _lastRightEyeProb < eyeClosedThresh;
+        if (eyesClosed != _eyesClosedWarning) {
+          setState(() => _eyesClosedWarning = eyesClosed);
+        }
+      } else {
+        if (_eyesClosedWarning) setState(() => _eyesClosedWarning = false);
+      }
       final nose = face.landmarks[FaceLandmarkType.noseBase];
       final mouthLeft = face.landmarks[FaceLandmarkType.leftMouth];
       final mouthRight = face.landmarks[FaceLandmarkType.rightMouth];
       final hasNose = nose != null;
       final hasMouth = mouthLeft != null || mouthRight != null;
+
       // Calculate yaw first (before the guard check)
       double yaw = face.headEulerAngleY ?? 0;
       if (isFront) yaw = -yaw;
@@ -268,11 +301,6 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         _setFeedback(guard.message, Colors.red, true);
         return;
       }
-
-      // if (nose == null || mouthL == null || mouthR == null) {
-      //   _setFeedback('Keep your full face in the oval', Colors.orange, true);
-      //   return;
-      // }
 
       setState(() => _faceDetected = true);
 
@@ -352,8 +380,6 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         return;
       }
 
-      // double yaw = face.headEulerAngleY ?? 0;
-      // if (isFront) yaw = -yaw;
       dev.log('🎯 yaw=$yaw iof=${iof.toStringAsFixed(2)} smile=${face.smilingProbability?.toStringAsFixed(2)}');
       _evaluate(face: face, yaw: yaw, smile: face.smilingProbability ?? 0.0);
     } catch (e) {
@@ -365,7 +391,6 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     dev.log(
       '🔍 evaluate: step=${_step.step} yaw=$yaw lightingBlock=${_lightingResult.blockStep} cooldown=$_stepCooldown',
     );
-    // ⚠️ CHECK LIGHTING FIRST - BEFORE ANY STEP EVALUATION
     if (_lightingResult.blockStep) {
       return;
     }
@@ -377,6 +402,12 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         final now = DateTime.now();
         final frameGapMs = _lastFrameTime != null ? now.difference(_lastFrameTime!).inMilliseconds : 0;
         _lastFrameTime = now;
+
+        // ── Pause progress when eyes are closed ──
+        if (_eyesClosedWarning) {
+          _setFeedback('Keep your eyes open! 👀', Colors.orange, true);
+          break;
+        }
 
         if (yaw.abs() < 20) {
           _straightHeldMs += frameGapMs.clamp(0, Platform.isAndroid ? 300 : 200);
@@ -409,8 +440,6 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         break;
 
       case LiveStep.turnLeft:
-        // On Android front camera: turning head RIGHT (physically) = positive yaw
-        // Mirror preview makes it appear as left, so negative yaw = user's visual left
         passed = Platform.isAndroid ? yaw < -18 : yaw > 18;
         if (!passed) {
           _setFeedback('Turn head more to the LEFT ⬅️', _step.color, true);
@@ -448,7 +477,11 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
 
       // CAPTURE IMAGES FOR SPECIFIC STEPS
       if (_step.step == LiveStep.lookStraight || _step.step == LiveStep.turnLeft || _step.step == LiveStep.turnRight) {
-        await _captureStepImage();
+        final captured = await _captureStepImage();
+        // ── If capture was skipped (e.g. eyes closed), do NOT advance step ──
+        if (!captured) return;
+        _eyeOpenRetryCount = 0;
+        setState(() => _eyesClosedWarning = false); // ← ADD
       }
 
       if (_stepIndex < kSteps.length - 1) {
@@ -465,12 +498,39 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     });
   }
 
-  Future<void> _captureStepImage() async {
-    if (_isCapturing) return;
+  Future<bool> _captureStepImage() async {
+    if (_isCapturing) return false;
+
+    // ── iOS: Guard against closed-eye capture on front/straight image ──
+    if (_step.step == LiveStep.lookStraight) {
+      final captureEyeThresh = Platform.isAndroid ? 0.35 : 0.5;
+      if (_lastLeftEyeProb < captureEyeThresh || _lastRightEyeProb < captureEyeThresh) {
+        _eyeOpenRetryCount++;
+        dev.log(
+          '👁 Eyes closed at capture time — retry $_eyeOpenRetryCount/$_maxEyeOpenRetries left=$_lastLeftEyeProb right=$_lastRightEyeProb',
+        );
+
+        if (_eyeOpenRetryCount >= _maxEyeOpenRetries) {
+          dev.log('👁 Max retries reached — capturing despite low eye prob');
+          _eyeOpenRetryCount = 0;
+          // Fall through to capture
+        } else {
+          _straightHeldMs = 0;
+          _lastFrameTime = null;
+          _stepCooldown = false;
+          setState(() => _eyesClosedWarning = true);
+          _setFeedback('Keep your eyes open! 👀', Colors.orange, true);
+          return false;
+        }
+      } else {
+        _eyeOpenRetryCount = 0;
+        setState(() => _eyesClosedWarning = false);
+      }
+    }
+
     _isCapturing = true;
 
     try {
-      // Safely stop stream before capture
       if (_isStreaming) {
         _isStreaming = false;
         try {
@@ -480,10 +540,9 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         } catch (_) {}
       }
 
-      // Give Android camera time to settle
       await Future.delayed(const Duration(milliseconds: 300));
 
-      if (_controller == null || !_controllerReady) return;
+      if (_controller == null || !_controllerReady) return false;
 
       final file = await _controller!.takePicture();
       final ts = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
@@ -502,21 +561,38 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
 
       await Future.delayed(const Duration(milliseconds: 400));
       if (mounted && _controllerReady) {
-        _labelFrame = 0; // ← Add this line before _startStream()
+        _labelFrame = 0;
         _lastLabels = [];
-        _faceGuard.reset(); // ← optional but cleaner
-        _startStream();
+        _faceGuard.reset();
+        // ── Android: camera session may break after takePicture ──
+        try {
+          _startStream();
+        } catch (e) {
+          dev.log('Stream restart failed after capture — reinitializing camera: $e');
+          await _startCamera();
+        }
       }
+      return true;
     } catch (e) {
       dev.log('Step capture error: $e');
-      // Try to restart stream on error
       await Future.delayed(const Duration(milliseconds: 500));
-      if (mounted && _controllerReady) {
-        _labelFrame = 0; // ← Add here too
+      if (mounted) {
+        _labelFrame = 0;
         _lastLabels = [];
-        _faceGuard.reset(); // ← optional but cleaner
-        _startStream();
+        _faceGuard.reset();
+        // ── Reinitialize camera fully on error (handles Android broken pipe) ──
+        try {
+          if (_controllerReady) {
+            _startStream();
+          } else {
+            await _startCamera();
+          }
+        } catch (e2) {
+          dev.log('Stream restart failed after capture error — reinitializing camera: $e2');
+          await _startCamera();
+        }
       }
+      return false;
     } finally {
       _isCapturing = false;
     }
@@ -623,7 +699,31 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
             child: const SizedBox.expand(),
           ),
         ),
-
+        if (_eyesClosedWarning)
+          Positioned(
+            top: activeWarning.warning != FaceWarning.none ? 140 : 80,
+            left: 16,
+            right: 16,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.orange.withOpacity(0.92),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.remove_red_eye_outlined, color: Colors.white, size: 20),
+                  SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      '👀 Please keep your eyes open',
+                      style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
         // Face alignment hint
         if (!_faceDetected)
           Positioned.fill(

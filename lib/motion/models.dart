@@ -18,6 +18,7 @@ enum FaceWarning {
   eyeglasses,
   nudity,
   lowLight, // ← THIS LINE MUST BE HERE
+  eyesClosed, // ← ADD THIS
 }
 
 // ═══════════════════════════════════════════════════════════
